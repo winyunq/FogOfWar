@@ -38,6 +38,11 @@ public class FogOfWar : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
+				"MassEntity",
+				"MassCommon",
+				"MassMovement",
+				"RHI",
+				"RenderCore",
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

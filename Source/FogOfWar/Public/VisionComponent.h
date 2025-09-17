@@ -14,7 +14,7 @@ class FOGOFWAR_API UVisionComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
-private:
+public:
 	UPROPERTY(EditAnywhere, meta = (ClampMin = 0.0f, UIMin = 0.0f))
 	float SightRadius = 1000.0f;
 
