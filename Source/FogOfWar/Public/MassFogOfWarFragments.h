@@ -4,7 +4,7 @@
 
 #include "MassEntityTypes.h"
 #include "MassCommonFragments.h"
-#include "GeminiMassFogOfWarFragments.generated.h"
+#include "MassFogOfWarFragments.generated.h"
 
 // Internal struct to hold vision data for a single unit
 UENUM()
@@ -27,7 +27,7 @@ struct FOGOFWAR_API FVisionUnitData
 	float GridSpaceRadius = 0.0f;
 
 	UPROPERTY()
-	FIntVector2 LocalAreaCachedMinIJ;
+	FIntVector2 LocalAreaCachedMinIJ = FIntVector2::ZeroValue;
 
 	UPROPERTY()
 	TArray<ETileState> LocalAreaTilesCachedStates;
@@ -49,67 +49,78 @@ struct FOGOFWAR_API FVisionUnitData
 };
 
 /**
- * @struct FGeminiMassVisibleEntityTag
+ * @struct FMassVisibleEntityTag
  * @brief 标记可被视野系统揭示的实体。
  * @details 拥有此标签的Mass实体表示它们可以被战争迷雾系统检测到并显示其可见性状态。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassVisibleEntityTag : public FMassTag
+struct FOGOFWAR_API FMassVisibleEntityTag : public FMassTag
 {
 	GENERATED_BODY()
 };
 
 /**
- * @struct FGeminiMassVisionEntityTag
+ * @struct FMassVisionEntityTag
  * @brief 标记提供视野的实体。
  * @details 拥有此标签的Mass实体表示它们能够向战争迷雾系统提供视野，揭示周围区域。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassVisionEntityTag : public FMassTag
+struct FOGOFWAR_API FMassVisionEntityTag : public FMassTag
 {
 	GENERATED_BODY()
 };
 
 /**
- * @struct FGeminiMassStationaryTag
+ * @struct FMassStationaryTag
  * @brief 标记不移动的实体。
  * @details 拥有此标签的Mass实体被视为静态的，其视野信息在初始化后会被缓存，从而实现显著的性能优化。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassStationaryTag : public FMassTag
+struct FOGOFWAR_API FMassStationaryTag : public FMassTag
 {
 	GENERATED_BODY()
 };
 
 /**
- * @struct FGeminiMassMinimapVisibleTag
+ * @struct FMassMinimapVisibleTag
  * @brief 标记始终在小地图上可见的实体。
  * @details 拥有此标签的Mass实体无论战争迷雾状态如何，都将在小地图上显示。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassMinimapVisibleTag : public FMassTag
+struct FOGOFWAR_API FMassMinimapVisibleTag : public FMassTag
 {
 	GENERATED_BODY()
 };
 
 /**
- * @struct FGeminiMassLocationChangedTag
+ * @struct FMassLocationChangedTag
  * @brief 标记自上一帧以来位置发生变化的实体。
  * @details 这是一个临时标签，用于驱动视野重新计算，确保只有移动的实体才触发更新。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassLocationChangedTag : public FMassTag
+struct FOGOFWAR_API FMassLocationChangedTag : public FMassTag
 {
 	GENERATED_BODY()
 };
 
 /**
- * @struct FGeminiMassVisionFragment
+ * @struct FMassVisionInitializedTag
+ * @brief 标记已经完成初始视野计算的实体。
+ * @details 这是一个内部标签，用于确保每个视野单位的初始视野只被计算一次。
+ */
+USTRUCT()
+struct FOGOFWAR_API FMassVisionInitializedTag : public FMassTag
+{
+	GENERATED_BODY()
+};
+
+/**
+ * @struct FMassVisionFragment
  * @brief 存储实体的视野相关数据。
  * @details 此Fragment包含实体提供视野所需的各种参数，例如视野半径。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassVisionFragment : public FMassFragment
+struct FOGOFWAR_API FMassVisionFragment : public FMassFragment
 {
 	GENERATED_BODY()
 
@@ -120,12 +131,12 @@ struct FOGOFWAR_API FGeminiMassVisionFragment : public FMassFragment
 };
 
 /**
- * @struct FGeminiMassPreviousVisionFragment
+ * @struct FMassPreviousVisionFragment
  * @brief 存储实体上一帧的视野数据。
  * @details 用于在计算新视野之前，清除实体在上一帧对战争迷雾的贡献，解决视野残留问题。
  */
 USTRUCT()
-struct FOGOFWAR_API FGeminiMassPreviousVisionFragment : public FMassFragment
+struct FOGOFWAR_API FMassPreviousVisionFragment : public FMassFragment
 {
 	GENERATED_BODY()
 

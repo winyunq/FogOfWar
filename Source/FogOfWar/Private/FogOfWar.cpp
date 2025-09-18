@@ -1,6 +1,6 @@
 // Copyright Winyunq, 2025. All Rights Reserved.
 
-#include "GeminiFogOfWar.h"
+#include "FogOfWar.h"
 
 #include "Components/BrushComponent.h"
 #include "Components/PostProcessComponent.h"
@@ -12,7 +12,7 @@
 // Original FogOfWar.cpp includes VisionComponent.h, but it's obsolete now.
 // #include "VisionComponent.h" 
 
-DEFINE_LOG_CATEGORY(LogGeminiFogOfWar);
+DEFINE_LOG_CATEGORY(LogFogOfWar);
 
 DECLARE_STATS_GROUP(TEXT("FogOfWar"), STATGROUP_FogOfWar, STATCAT_Advanced);
 
@@ -31,7 +31,7 @@ namespace Names
 	DECLARE_STATIC_FNAME(FOW_BottomLeftWorldLocation);
 }
 
-AGeminiFogOfWar::AGeminiFogOfWar()
+AFogOfWar::AFogOfWar()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
@@ -40,7 +40,7 @@ AGeminiFogOfWar::AGeminiFogOfWar()
 	PostProcess->SetupAttachment(RootComponent);
 }
 
-bool AGeminiFogOfWar::IsLocationVisible(FVector WorldLocation)
+bool AFogOfWar::IsLocationVisible(FVector WorldLocation)
 {
 	FIntVector2 TileIJ = ConvertWorldLocationToTileIJ(FVector2D(WorldLocation));
 	if (!IsGlobalIJValid(TileIJ))
@@ -53,12 +53,12 @@ bool AGeminiFogOfWar::IsLocationVisible(FVector WorldLocation)
 	return bIsVisible;
 }
 
-UTexture* AGeminiFogOfWar::GetFinalVisibilityTexture()
+UTexture* AFogOfWar::GetFinalVisibilityTexture()
 {
 	return Cast<UTexture>(FinalVisibilityTextureRenderTarget);
 }
 
-void AGeminiFogOfWar::SetCommonMIDParameters(UMaterialInstanceDynamic* MID)
+void AFogOfWar::SetCommonMIDParameters(UMaterialInstanceDynamic* MID)
 {
 	MID->SetTextureParameterValue(Names::FOW_FinalVisibilityTexture, GetFinalVisibilityTexture());
 	MID->SetVectorParameterValue(Names::FOW_GridResolution, FVector(GridResolution.X, GridResolution.Y, 0));
@@ -66,7 +66,7 @@ void AGeminiFogOfWar::SetCommonMIDParameters(UMaterialInstanceDynamic* MID)
 	MID->SetVectorParameterValue(Names::FOW_BottomLeftWorldLocation, FVector(GridBottomLeftWorldLocation.X, GridBottomLeftWorldLocation.Y, 0));
 }
 
-void AGeminiFogOfWar::Activate()
+void AFogOfWar::Activate()
 {
 	if (!ensure(!bActivated))
 	{
@@ -128,7 +128,7 @@ void AGeminiFogOfWar::Activate()
 	PrimaryActorTick.SetTickFunctionEnable(true);
 }
 
-void AGeminiFogOfWar::BeginPlay()
+void AFogOfWar::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -139,7 +139,7 @@ void AGeminiFogOfWar::BeginPlay()
 }
 
 #if WITH_EDITOR
-void AGeminiFogOfWar::RefreshVolumeInEditor()
+void AFogOfWar::RefreshVolumeInEditor()
 {
 	if (GetWorld() && !GetWorld()->IsGameWorld())
 	{
@@ -149,7 +149,7 @@ void AGeminiFogOfWar::RefreshVolumeInEditor()
 #endif
 
 #if WITH_EDITOR
-bool AGeminiFogOfWar::CanEditChange(const FProperty* InProperty) const
+bool AFogOfWar::CanEditChange(const FProperty* InProperty) const
 {
 	if (!Super::CanEditChange(InProperty))
 	{
@@ -158,12 +158,12 @@ bool AGeminiFogOfWar::CanEditChange(const FProperty* InProperty) const
 
 	const FName PropertyName = InProperty->GetFName();
 
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, TileSize) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, GridVolume) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, InterpolationMaterial) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, AfterInterpolationMaterial) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, SuperSamplingMaterial) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, PostProcessingMaterial))
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, TileSize) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, InterpolationMaterial) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, AfterInterpolationMaterial) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, SuperSamplingMaterial) ||
+		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, PostProcessingMaterial))
 	{
 		return !GetWorld() || !GetWorld()->IsGameWorld();
 	}
@@ -173,7 +173,7 @@ bool AGeminiFogOfWar::CanEditChange(const FProperty* InProperty) const
 #endif
 
 #if WITH_EDITOR
-void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+void AFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
@@ -181,7 +181,7 @@ void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 
 	if (GetWorld() && GetWorld()->IsGameWorld())
 	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, MinimalVisibility))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, MinimalVisibility))
 		{
 			if (IsValid(AfterInterpolationMID))
 			{
@@ -190,7 +190,7 @@ void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 			return;
 		}
 
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, NotVisibleRegionBrightness))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, NotVisibleRegionBrightness))
 		{
 			if (IsValid(PostProcessingMID))
 			{
@@ -199,13 +199,13 @@ void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 			return;
 		}
 
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, ApproximateSecondsToAbsorbNewSnapshot))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, ApproximateSecondsToAbsorbNewSnapshot))
 		{
 			bFirstTick = true;
 			return;
 		}
 
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, VisionBlockingDeltaHeightThreshold))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, VisionBlockingDeltaHeightThreshold))
 		{
 			// This part is obsolete in Mass. The Mass processors will handle vision recalculation.
 			// for (auto& [key, value] : RegisteredVisions)
@@ -218,8 +218,8 @@ void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 
 	if (GetWorld() && !GetWorld()->IsGameWorld())
 	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, TileSize) ||
-			PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, GridVolume))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, TileSize) ||
+			PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume))
 		{
 			RefreshVolumeInEditor();
 			return;
@@ -228,7 +228,7 @@ void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 }
 #endif
 
-void AGeminiFogOfWar::Tick(float DeltaSeconds)
+void AFogOfWar::Tick(float DeltaSeconds)
 {
 	DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Tick"), STAT_FogOfWarTick, STATGROUP_FogOfWar);
 
@@ -282,7 +282,7 @@ void AGeminiFogOfWar::Tick(float DeltaSeconds)
 	bFirstTick = false;
 }
 
-void AGeminiFogOfWar::Initialize()
+void AFogOfWar::Initialize()
 {
 	if (!IsValid(GridVolume))
 	{
@@ -310,7 +310,7 @@ void AGeminiFogOfWar::Initialize()
 	};
 }
 
-void AGeminiFogOfWar::CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ)
+void AFogOfWar::CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ)
 {
 	FVector2D WorldLocation = ConvertTileIJToTileCenterWorldLocation(TileIJ);
 	FHitResult HitResult;
@@ -329,7 +329,7 @@ void AGeminiFogOfWar::CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ)
 	Tile.Height = -std::numeric_limits<decltype(Tile.Height)>::infinity();
 }
 
-UTexture2D* AGeminiFogOfWar::CreateSnapshotTexture()
+UTexture2D* AFogOfWar::CreateSnapshotTexture()
 {
 	UTexture2D* Texture = UTexture2D::CreateTransient(GridResolution.Y, GridResolution.X, PF_R8);
 	Texture->AddressX = TA_Clamp;
@@ -345,7 +345,7 @@ UTexture2D* AGeminiFogOfWar::CreateSnapshotTexture()
 	return Texture;
 }
 
-UTextureRenderTarget2D* AGeminiFogOfWar::CreateRenderTarget()
+UTextureRenderTarget2D* AFogOfWar::CreateRenderTarget()
 {
 	UTextureRenderTarget2D* RenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, GridResolution.Y, GridResolution.X, RTF_R8);
 	RenderTarget->AddressX = TA_Clamp;
@@ -362,7 +362,7 @@ UTextureRenderTarget2D* AGeminiFogOfWar::CreateRenderTarget()
 }
 
 #if WITH_EDITORONLY_DATA
-void AGeminiFogOfWar::WriteHeightmapDataToTexture(UTexture2D* Texture)
+void AFogOfWar::WriteHeightmapDataToTexture(UTexture2D* Texture)
 {
 	TArray<uint8> HeightmapDataBuffer;
 	HeightmapDataBuffer.SetNum(Tiles.Num());
@@ -381,7 +381,7 @@ void AGeminiFogOfWar::WriteHeightmapDataToTexture(UTexture2D* Texture)
 }
 #endif
 
-void AGeminiFogOfWar::WriteVisionDataToTexture(UTexture2D* Texture)
+void AFogOfWar::WriteVisionDataToTexture(UTexture2D* Texture)
 {
 	for (int TileIndex = 0; TileIndex < Tiles.Num(); TileIndex++)
 	{
@@ -396,7 +396,7 @@ void AGeminiFogOfWar::WriteVisionDataToTexture(UTexture2D* Texture)
 	Texture->UpdateResource();
 }
 
-FVector2f AGeminiFogOfWar::ConvertWorldSpaceLocationToGridSpace(const FVector2D& WorldLocation)
+FVector2f AFogOfWar::ConvertWorldSpaceLocationToGridSpace(const FVector2D& WorldLocation)
 {
 	return {
 		static_cast<float>((WorldLocation.X - GridBottomLeftWorldLocation.X) / TileSize),
@@ -404,7 +404,7 @@ FVector2f AGeminiFogOfWar::ConvertWorldSpaceLocationToGridSpace(const FVector2D&
 	};
 }
 
-FVector2D AGeminiFogOfWar::ConvertTileIJToTileCenterWorldLocation(const FIntVector2& IJ)
+FVector2D AFogOfWar::ConvertTileIJToTileCenterWorldLocation(const FIntVector2& IJ)
 {
 	return {
 		GridBottomLeftWorldLocation.X + TileSize * IJ.X + TileSize / 2,
@@ -412,7 +412,7 @@ FVector2D AGeminiFogOfWar::ConvertTileIJToTileCenterWorldLocation(const FIntVect
 	};
 }
 
-FIntVector2 AGeminiFogOfWar::ConvertGridLocationToTileIJ(const FVector2f& GridLocation)
+FIntVector2 AFogOfWar::ConvertGridLocationToTileIJ(const FVector2f& GridLocation)
 {
 	return {
 		FMath::FloorToInt(GridLocation.X),
@@ -420,13 +420,13 @@ FIntVector2 AGeminiFogOfWar::ConvertGridLocationToTileIJ(const FVector2f& GridLo
 	};
 }
 
-FIntVector2 AGeminiFogOfWar::ConvertWorldLocationToTileIJ(const FVector2D& WorldLocation)
+FIntVector2 AFogOfWar::ConvertWorldLocationToTileIJ(const FVector2D& WorldLocation)
 {
 	FVector2f GridSpaceLocation = ConvertWorldSpaceLocationToGridSpace(WorldLocation);
 	return ConvertGridLocationToTileIJ(GridSpaceLocation);
 }
 
-bool AGeminiFogOfWar::IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight)
+bool AFogOfWar::IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight)
 {
 	return PotentialObstacleHeight - ObserverHeight > VisionBlockingDeltaHeightThreshold;
 }

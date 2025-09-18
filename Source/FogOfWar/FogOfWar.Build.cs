@@ -26,6 +26,9 @@ public class FogOfWar : ModuleRules
 			new string[]
 			{
 				"Core",
+				"MassEntity", // Moved to Public
+				"MassMovement", // Moved to Public
+				"MassSpawner", // For UMassEntityTraitBase
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);
@@ -38,9 +41,7 @@ public class FogOfWar : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
-				"MassEntity",
 				"MassCommon",
-				"MassMovement",
 				"RHI",
 				"RenderCore",
 				// ... add private dependencies that you statically link with here ...	

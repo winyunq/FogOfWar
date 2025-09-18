@@ -6,15 +6,15 @@
 #include "GameFramework/Actor.h"
 #include "MassEntityTypes.h" // For Mass framework integration
 #include "Components/PostProcessComponent.h" // For rendering
-#include "Mass/GeminiMassFogOfWarFragments.h" // For Mass fragments and tags
-#include "GeminiFogOfWar.generated.h"
+#include "MassFogOfWarFragments.h" // For Mass fragments and tags
+#include "FogOfWar.generated.h"
 
 class UBrushComponent; // Original FogOfWar.h uses AVolume* GridVolume, so UBrushComponent is needed for its bounds.
 class UTexture2D;
 class UTextureRenderTarget2D;
 class AVolume; // For GridVolume
 
-DECLARE_LOG_CATEGORY_EXTERN(LogGeminiFogOfWar, Log, All)
+DECLARE_LOG_CATEGORY_EXTERN(LogFogOfWar, Log, All)
 
 // Internal struct for a single tile in the grid
 USTRUCT()
@@ -31,12 +31,12 @@ struct FOGOFWAR_API FTile
 
 
 UCLASS(BlueprintType, Blueprintable)
-class FOGOFWAR_API AGeminiFogOfWar : public AActor
+class FOGOFWAR_API AFogOfWar : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	AGeminiFogOfWar();
+	AFogOfWar();
 
 public:
 	UFUNCTION(BlueprintCallable)
