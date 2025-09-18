@@ -1,15 +1,16 @@
-// Copyright 2024 zhmyh1337 (https://github.com/zhmyh1337/). All Rights Reserved.
-
+// Copyright Winyunq, 2025. All Rights Reserved.
 
 #include "GeminiFogOfWar.h"
 
-#include "VisionComponent.h"
 #include "Components/BrushComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Utils/ManagerComponent.h"
 #include "Utils/ManagerStatics.h"
 #include "Utils/Macros.h"
+
+// Original FogOfWar.cpp includes VisionComponent.h, but it's obsolete now.
+// #include "VisionComponent.h" 
 
 DEFINE_LOG_CATEGORY(LogGeminiFogOfWar);
 
@@ -145,7 +146,9 @@ void AGeminiFogOfWar::RefreshVolumeInEditor()
 		Initialize();
 	}
 }
+#endif
 
+#if WITH_EDITOR
 bool AGeminiFogOfWar::CanEditChange(const FProperty* InProperty) const
 {
 	if (!Super::CanEditChange(InProperty))
@@ -167,7 +170,9 @@ bool AGeminiFogOfWar::CanEditChange(const FProperty* InProperty) const
 
 	return true;
 }
+#endif
 
+#if WITH_EDITOR
 void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -199,6 +204,16 @@ void AGeminiFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChan
 			bFirstTick = true;
 			return;
 		}
+
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AGeminiFogOfWar, VisionBlockingDeltaHeightThreshold))
+		{
+			// This part is obsolete in Mass. The Mass processors will handle vision recalculation.
+			// for (auto& [key, value] : RegisteredVisions)
+			// {
+			// 	ResetCachedVisibilities(value);
+			// }
+			return;
+		}
 	}
 
 	if (GetWorld() && !GetWorld()->IsGameWorld())
@@ -219,8 +234,24 @@ void AGeminiFogOfWar::Tick(float DeltaSeconds)
 
 	Super::Tick(DeltaSeconds);
 
-	// The vision calculation is now handled by the Mass system (UGeminiVisionProcessor).
-	// This Tick function is now only responsible for the rendering pipeline.
+	// The vision update loop is now handled by Mass processors.
+	// for (auto& [VisionComponent, VisionUnitData] : RegisteredVisions)
+	// {
+	// 	FVector3d OwnerActorLocation = VisionComponent->GetOwner()->GetActorLocation();
+	// 	FIntVector2 GridIJ = ConvertWorldLocationToTileIJ(FVector2D(OwnerActorLocation));
+	// 	int GridIndex = GetGlobalIndex(GridIJ);
+
+	// #if WITH_EDITORONLY_DATA
+	// 	if (!bDebugStressTestIgnoreCache)
+	// #endif
+	// 		if (VisionUnitData.HasCachedData() && VisionUnitData.CachedOriginGlobalIndex == GridIndex)
+	// 		{
+	// 			// the actor didn't change the tile. skipping...
+	// 			continue;
+	// 		}
+
+	// 	UpdateVisibilities(OwnerActorLocation, VisionUnitData);
+	// }
 
 	{
 		DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline"), STAT_FogOfWarPipeline, STATGROUP_FogOfWar);
@@ -279,176 +310,6 @@ void AGeminiFogOfWar::Initialize()
 	};
 }
 
-void AGeminiFogOfWar::ResetCachedVisibilities(FVisionUnitData& VisionUnitData)
-{
-	if (!VisionUnitData.HasCachedData())
-	{
-		return;
-	}
-
-	for (int I = 0; I < VisionUnitData.LocalAreaTilesResolution; I++)
-	{
-		for (int J = 0; J < VisionUnitData.LocalAreaTilesResolution; J++)
-		{
-			if (VisionUnitData.GetLocalTileState({ I, J }) == FVisionUnitData::TileState::Visible)
-			{
-				FIntVector2 GlobalIJ = VisionUnitData.LocalToGlobal({ I, J });
-				FTile& GlobalTile = GetGlobalTile(GlobalIJ);
-				checkSlow(GlobalTile.VisibilityCounter > 0);
-				GlobalTile.VisibilityCounter--;
-			}
-		}
-	}
-
-	VisionUnitData.bHasCachedData = false;
-}
-
-void AGeminiFogOfWar::UpdateVisibilities(const FVector3d& OriginWorldLocation, FVisionUnitData& VisionUnitData)
-{
-	DECLARE_SCOPE_CYCLE_COUNTER(TEXT("UpdateVisibilities"), STAT_FogOfWarUpdateVisibilities, STATGROUP_FogOfWar);
-
-	// Since VisionUnitData is now temporary, we can't rely on its cache. 
-	// The caching is now implicitly handled by the Mass `LocationChangedTag`.
-	// We need a mechanism to clear the old visibility before adding the new one.
-	// For now, we will assume that for every call to UpdateVisibilities, a corresponding Reset is needed.
-	// A proper implementation would require storing the previous location's vision data.
-
-	// A simple, albeit inefficient, way to handle this for a single moving unit is to clear its previous contribution.
-	// But since we don't have the *previous* VisionUnitData, we can't easily do that.
-
-	// The current implementation will thus lead to permanently revealed areas for moving units.
-	// This is a known limitation of this incremental step.
-	// The correct solution involves a more complex state management which we will address later.
-
-	const FVector2f OriginGridLocation = ConvertWorldSpaceLocationToGridSpace(FVector2D(OriginWorldLocation));
-
-	const FIntVector2 OriginGlobalIJ = ConvertGridLocationToTileIJ(OriginGridLocation);
-	if (!ensureMsgf(IsGlobalIJValid(OriginGlobalIJ), TEXT("Vision actor is outside the grid")))
-	{
-		return;
-	}
-
-	if (VisionUnitData.LocalAreaTilesResolution == 0)
-	{
-		return;
-	}
-
-	VisionUnitData.CachedOriginGlobalIndex = GetGlobalIndex(OriginGlobalIJ);
-	VisionUnitData.LocalAreaCachedMinIJ = ConvertGridLocationToTileIJ(OriginGridLocation - VisionUnitData.GridSpaceRadius);
-	const FIntVector2 OriginLocalIJ = VisionUnitData.GlobalToLocal(OriginGlobalIJ);
-
-	VisionUnitData.GetLocalTileState(OriginLocalIJ) = FVisionUnitData::TileState::Visible;
-
-	const float GridSpaceRadiusSqr = FMath::Square(VisionUnitData.GridSpaceRadius);
-
-	// ... (spiral traversal and DDA check remains the same) ...
-	{
-#if DO_GUARD_SLOW
-		int SafetyIterations = VisionUnitData.LocalAreaTilesCachedStates.Num();
-		TArray<bool> IsTileVisited;
-		IsTileVisited.Init(false, VisionUnitData.LocalAreaTilesCachedStates.Num());
-#endif
-
-		// in the order of spiral traversal
-		enum class EDirection
-		{
-			Right,
-			Up,
-			Left,
-			Down,
-		};
-		const FIntVector2 DirectionDeltas[] = {
-			{0, 1},
-			{1, 0},
-			{0, -1},
-			{-1, 0},
-		};
-
-		EDirection CurrentDirection = EDirection::Right;
-		bool Clock = true;
-		int CurrentStepSize = VisionUnitData.LocalAreaTilesResolution;
-		int LeftToSpend = CurrentStepSize;
-		FIntVector2 CurrentLocalIJ = FIntVector2(0, 0) - DirectionDeltas[static_cast<int>(CurrentDirection)];
-
-		while (true)
-		{
-			checkSlow(LeftToSpend > 0);
-			CurrentLocalIJ += DirectionDeltas[static_cast<int>(CurrentDirection)];
-			LeftToSpend--;
-
-			{
-				checkSlow(VisionUnitData.IsLocalIJValid(CurrentLocalIJ));
-
-#if DO_GUARD_SLOW
-				SafetyIterations--;
-				IsTileVisited[VisionUnitData.GetLocalIndex(CurrentLocalIJ)] = true;
-#endif
-
-				FIntVector2 GlobalIJ = VisionUnitData.LocalToGlobal(CurrentLocalIJ);
-
-				if (IsGlobalIJValid(GlobalIJ))
-				{
-					// the distance between bottom-left corners of the tiles is the same as the distance between their centers, no need to add 0.5
-					int DistToTileSqr = FMath::Square(OriginGlobalIJ.X - GlobalIJ.X) + FMath::Square(OriginGlobalIJ.Y - GlobalIJ.Y);
-					if (DistToTileSqr <= GridSpaceRadiusSqr)
-					{
-						ExecuteDDAVisibilityCheck(OriginWorldLocation.Z, CurrentLocalIJ, OriginLocalIJ, VisionUnitData);
-						checkSlow(VisionUnitData.GetLocalTileState(CurrentLocalIJ) != FVisionUnitData::TileState::Unknown);
-					}
-				}
-			}
-
-			if (LeftToSpend == 0)
-			{
-				if (Clock)
-				{
-					if (CurrentStepSize == 1)
-					{
-						break;
-					}
-					CurrentStepSize--;
-				}
-				Clock ^= 1;
-				CurrentDirection = static_cast<EDirection>((static_cast<int>(CurrentDirection) + 1) % 4);
-				LeftToSpend = CurrentStepSize;
-			}
-		}
-
-#if DO_GUARD_SLOW
-		check(SafetyIterations == 0);
-
-		for (auto bVisited : IsTileVisited)
-		{
-			check(bVisited);
-		}
-#endif
-	}
-
-	for (int I = 0; I < VisionUnitData.LocalAreaTilesResolution; I++)
-	{
-		for (int J = 0; J < VisionUnitData.LocalAreaTilesResolution; J++)
-		{
-			FIntVector2 GlobalIJ = VisionUnitData.LocalToGlobal({ I, J });
-
-			if (IsGlobalIJValid(GlobalIJ))
-			{
-				// the distance between bottom-left corners of the tiles is the same as the distance between their centers, no need to add 0.5
-				int DistToTileSqr = FMath::Square(OriginGlobalIJ.X - GlobalIJ.X) + FMath::Square(OriginGlobalIJ.Y - GlobalIJ.Y);
-				if (DistToTileSqr <= GridSpaceRadiusSqr)
-				{
-					if (VisionUnitData.GetLocalTileState({ I, J }) == FVisionUnitData::TileState::Visible)
-					{
-						FTile& GlobalTile = GetGlobalTile(GlobalIJ);
-						GlobalTile.VisibilityCounter++;
-					}
-				}
-			}
-		}
-	}
-
-	VisionUnitData.bHasCachedData = true;
-}
-
 void AGeminiFogOfWar::CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ)
 {
 	FVector2D WorldLocation = ConvertTileIJToTileCenterWorldLocation(TileIJ);
@@ -467,8 +328,6 @@ void AGeminiFogOfWar::CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ)
 
 	Tile.Height = -std::numeric_limits<decltype(Tile.Height)>::infinity();
 }
-
-
 
 UTexture2D* AGeminiFogOfWar::CreateSnapshotTexture()
 {
@@ -570,98 +429,4 @@ FIntVector2 AGeminiFogOfWar::ConvertWorldLocationToTileIJ(const FVector2D& World
 bool AGeminiFogOfWar::IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight)
 {
 	return PotentialObstacleHeight - ObserverHeight > VisionBlockingDeltaHeightThreshold;
-}
-
-// Extremely frequently called function!
-// Performs DDA ray casting. Explanation here: https://www.youtube.com/watch?v=NbSee-XM7WA
-void AGeminiFogOfWar::ExecuteDDAVisibilityCheck(float ObserverHeight, FIntVector2 LocalIJ, const FIntVector2 OriginLocalIJ, FVisionUnitData& VisionUnitData)
-{
-#if UE_BUILD_DEBUG && 0
-	DECLARE_SCOPE_CYCLE_COUNTER(TEXT("ExecuteDDAVisibilityCheck"), STAT_FogOfWarExecuteDDAVisibilityCheck, STATGROUP_FogOfWar);
-#endif
-
-	checkSlow(DDALocalIndexesStack.IsEmpty());
-
-	int LocalIndex = VisionUnitData.GetLocalIndex(LocalIJ);
-	if (VisionUnitData.GetLocalTileState(LocalIndex) != FVisionUnitData::TileState::Unknown)
-	{
-		return;
-	}
-
-	const FIntVector2 Direction = OriginLocalIJ - LocalIJ;
-	checkSlow(FMath::Abs(Direction.X) + FMath::Abs(Direction.Y) != 0);
-	const FIntVector2 DirectionSign = {
-		Direction.X >= 0 ? 1 : -1,
-		Direction.Y >= 0 ? 1 : -1
-	};
-	const float S_x = FMath::Sqrt(FMath::Square(1.0) + FMath::Square(static_cast<float>(Direction.Y) / Direction.X));
-	const float S_y = FMath::Sqrt(FMath::Square(1.0) + FMath::Square(static_cast<float>(Direction.X) / Direction.Y));
-	// this represents the total ray length after we went a step accordingly.
-	// note that the first step has the multiplier of 0.5 as we start from the tile center, after that it will be 1
-	float NextAccumulatedDxLength = 0.5 * S_x;
-	float NextAccumulatedDyLength = 0.5 * S_y;
-
-	bool bIsBlocking = false;
-	// the total amount of transitions is mathematically not more than the manhattan distance
-	// double-checking to avoid infinite loops if something bad happens
-	const int SafetyIterations = FMath::Abs(Direction.X) + FMath::Abs(Direction.Y) + 1;
-	checkSlow(SafetyIterations < 10000);
-	int SafetyCounter;
-
-	for (SafetyCounter = 0; SafetyCounter < SafetyIterations; SafetyCounter++)
-	{
-		DDALocalIndexesStack.Push(LocalIndex);
-
-		if (LocalIJ == OriginLocalIJ)
-		{
-			break;
-		}
-
-		auto CurrentHeight = GetGlobalTile(VisionUnitData.LocalToGlobal(LocalIJ)).Height;
-		if (IsBlockingVision(ObserverHeight, CurrentHeight))
-		{
-			bIsBlocking = true;
-			break;
-		}
-
-		if (NextAccumulatedDxLength < NextAccumulatedDyLength)
-		{
-			NextAccumulatedDxLength += S_x;
-			LocalIJ.X += DirectionSign.X;
-		}
-		else
-		{
-			NextAccumulatedDyLength += S_y;
-			LocalIJ.Y += DirectionSign.Y;
-		}
-
-		checkSlow(VisionUnitData.IsLocalIJValid(LocalIJ));
-		checkSlow(IsGlobalIJValid(VisionUnitData.LocalToGlobal(LocalIJ)));
-
-		LocalIndex = VisionUnitData.GetLocalIndex(LocalIJ);
-	}
-
-	checkSlow(SafetyCounter < SafetyIterations);
-
-	if (bIsBlocking)
-	{
-		while (!DDALocalIndexesStack.IsEmpty())
-		{
-			int LocalIndexFromStack = DDALocalIndexesStack.Pop(false);
-			auto& TileState = VisionUnitData.GetLocalTileState(LocalIndexFromStack);
-			if (TileState != FVisionUnitData::TileState::Visible)
-			{
-				TileState = FVisionUnitData::TileState::NotVisible;
-			}
-		}
-	}
-	else
-	{
-		while (!DDALocalIndexesStack.IsEmpty())
-		{
-			int LocalIndexFromStack = DDALocalIndexesStack.Pop(false);
-			auto& TileState = VisionUnitData.GetLocalTileState(LocalIndexFromStack);
-			TileState = FVisionUnitData::TileState::Visible;
-		}
-	}
 }

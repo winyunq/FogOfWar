@@ -1,14 +1,34 @@
-// Copyright 2024 zhmyh1337 (https://github.com/zhmyh1337/). All Rights Reserved.
+// Copyright Winyunq, 2025. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
-#include "FogOfWar.h"
+#include "GameFramework/Actor.h"
+#include "MassEntityTypes.h" // For Mass framework integration
+#include "Components/PostProcessComponent.h" // For rendering
+#include "Mass/GeminiMassFogOfWarFragments.h" // For Mass fragments and tags
 #include "GeminiFogOfWar.generated.h"
+
+class UBrushComponent; // Original FogOfWar.h uses AVolume* GridVolume, so UBrushComponent is needed for its bounds.
+class UTexture2D;
+class UTextureRenderTarget2D;
+class AVolume; // For GridVolume
 
 DECLARE_LOG_CATEGORY_EXTERN(LogGeminiFogOfWar, Log, All)
 
-class UPostProcessComponent;
+// Internal struct for a single tile in the grid
+USTRUCT()
+struct FOGOFWAR_API FTile
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	float Height = 0.0f;
+
+	UPROPERTY()
+	int VisibilityCounter = 0;
+};
+
 
 UCLASS(BlueprintType, Blueprintable)
 class FOGOFWAR_API AGeminiFogOfWar : public AActor
@@ -19,8 +39,6 @@ public:
 	AGeminiFogOfWar();
 
 public:
-	void UpdateVisibilities(const FVector3d& OriginWorldLocation, FVisionUnitData& VisionUnitData);
-
 	UFUNCTION(BlueprintCallable)
 	bool IsLocationVisible(FVector WorldLocation);
 
@@ -33,21 +51,24 @@ public:
 	UFUNCTION(BlueprintCallable)
 	void Activate();
 
-	FORCEINLINE float GetTileSize() const { return TileSize; }
-	FORCEINLINE bool IsActivated() const { return bActivated; }
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar")
+	bool IsActivated() const { return bActivated; }
 
-protected:
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar")
+	float GetTileSize() const { return TileSize; }
+
+public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	TEnumAsByte<ECollisionChannel> HeightScanCollisionChannel = ECC_Camera;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
-	UPostProcessComponent* PostProcess;
+	TObjectPtr<UPostProcessComponent> PostProcess;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	bool bAutoActivate = true;
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly)
-	AVolume* GridVolume = nullptr;
+	TObjectPtr<AVolume> GridVolume = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta = (ClampMin = 0.0f, UIMin = 0.0f))
 	float TileSize = 100.0f;
@@ -67,16 +88,16 @@ protected:
 	float NotVisibleRegionBrightness = 0.1f;
 
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Materials")
-	UMaterialInterface* InterpolationMaterial;
+	TObjectPtr<UMaterialInterface> InterpolationMaterial;
 
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Materials")
-	UMaterialInterface* AfterInterpolationMaterial;
+	TObjectPtr<UMaterialInterface> AfterInterpolationMaterial;
 
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Materials")
-	UMaterialInterface* SuperSamplingMaterial;
+	TObjectPtr<UMaterialInterface> SuperSamplingMaterial;
 
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Materials")
-	UMaterialInterface* PostProcessingMaterial;
+	TObjectPtr<UMaterialInterface> PostProcessingMaterial;
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
@@ -92,59 +113,6 @@ protected:
 	float DebugHeightmapHightestZ = 1000.0f;
 #endif
 
-	FORCEINLINE bool IsActivated() const { return bActivated; }
-
-public:
-	struct FTile
-	{
-		float Height;
-
-		int VisibilityCounter = 0;
-	};
-
-	// some data for every vision unit, i.e. VisionComponent
-	// for now we cache tiles states in the local area of the unit not to update them when the vision unit is not moving
-	struct FVisionUnitData
-	{
-		enum class TileState : uint8
-		{
-			Unknown,
-			NotVisible,
-			Visible
-		};
-
-		const int LocalAreaTilesResolution;
-
-		const float GridSpaceRadius;
-
-		FIntVector2 LocalAreaCachedMinIJ;
-
-		// I'm pretty sure this array can be made global and shared between all vision units. Needs some thinking
-		TArray<TileState> LocalAreaTilesCachedStates;
-
-		int CachedOriginGlobalIndex;
-
-		bool bHasCachedData = false;
-
-		FORCEINLINE_DEBUGGABLE bool HasCachedData() const { return bHasCachedData; }
-
-		FORCEINLINE_DEBUGGABLE int GetLocalIndex(FIntVector2 IJ) const { return IJ.X * LocalAreaTilesResolution + IJ.Y; }
-
-		FORCEINLINE_DEBUGGABLE FIntVector2 GetLocalIJ(int LocalIndex) { return { LocalIndex / LocalAreaTilesResolution, LocalIndex % LocalAreaTilesResolution }; }
-
-		FORCEINLINE_DEBUGGABLE bool IsLocalIJValid(FIntVector2 IJ) { return (IJ.X >= 0) & (IJ.Y >= 0) & (IJ.X < LocalAreaTilesResolution) & (IJ.Y < LocalAreaTilesResolution); }
-
-		FORCEINLINE_DEBUGGABLE TileState& GetLocalTileState(int LocalIndex) { return LocalAreaTilesCachedStates[LocalIndex]; }
-
-		FORCEINLINE_DEBUGGABLE TileState& GetLocalTileState(FIntVector2 IJ) { checkSlow(IsLocalIJValid(IJ)); return GetLocalTileState(GetLocalIndex(IJ)); }
-
-
-
-		FORCEINLINE_DEBUGGABLE FIntVector2 LocalToGlobal(FIntVector2 LocalIJ) const { return LocalAreaCachedMinIJ + LocalIJ; }
-
-		FORCEINLINE_DEBUGGABLE FIntVector2 GlobalToLocal(FIntVector2 GlobalIJ) const { return GlobalIJ - LocalAreaCachedMinIJ; }
-	};
-
 protected:
 	virtual void BeginPlay() override;
 
@@ -159,12 +127,12 @@ protected:
 
 	virtual void Tick(float DeltaSeconds) override;
 
-protected:
+public:
 	void Initialize();
 
-	void CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ);
-
 	void ResetCachedVisibilities(FVisionUnitData& VisionUnitData);
+
+	void UpdateVisibilities(const FVector3d& OriginWorldLocation, FVisionUnitData& VisionUnitData);
 
 	void CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ);
 
@@ -178,29 +146,29 @@ protected:
 
 	void WriteVisionDataToTexture(UTexture2D* Texture);
 
-	FORCEINLINE_DEBUGGABLE int GetGlobalIndex(FIntVector2 IJ) const { return IJ.X * GridResolution.Y + IJ.Y; }
+	FORCEINLINE int GetGlobalIndex(FIntVector2 IJ) const { return IJ.X * GridResolution.Y + IJ.Y; }
 
-	FORCEINLINE_DEBUGGABLE FIntVector2 GetTileIJ(int GlobalIndex) { return { GlobalIndex / GridResolution.Y, GlobalIndex % GridResolution.Y }; }
+	FORCEINLINE FIntVector2 GetTileIJ(int GlobalIndex) { return { GlobalIndex / GridResolution.Y, GlobalIndex % GridResolution.Y }; }
 
-	FORCEINLINE_DEBUGGABLE FTile& GetGlobalTile(int GlobalIndex) { return Tiles[GlobalIndex]; }
+	FORCEINLINE FTile& GetGlobalTile(int GlobalIndex) { return Tiles[GlobalIndex]; }
 
-	FORCEINLINE_DEBUGGABLE FTile& GetGlobalTile(FIntVector2 IJ) { checkSlow(IsGlobalIJValid(IJ)); return GetGlobalTile(GetGlobalIndex(IJ)); }
+	FORCEINLINE FTile& GetGlobalTile(FIntVector2 IJ) { checkSlow(IsGlobalIJValid(IJ)); return GetGlobalTile(GetGlobalIndex(IJ)); }
 
-	FORCEINLINE_DEBUGGABLE bool IsGlobalIJValid(FIntVector2 IJ) { return (IJ.X >= 0) & (IJ.Y >= 0) & (IJ.X < GridResolution.X) & (IJ.Y < GridResolution.Y); }
+	FORCEINLINE bool IsGlobalIJValid(FIntVector2 IJ) { return (IJ.X >= 0) & (IJ.Y >= 0) & (IJ.X < GridResolution.X) & (IJ.Y < GridResolution.Y); }
 
-	FORCEINLINE_DEBUGGABLE FVector2f ConvertWorldSpaceLocationToGridSpace(const FVector2D& WorldLocation);
+	FORCEINLINE FVector2f ConvertWorldSpaceLocationToGridSpace(const FVector2D& WorldLocation);
 
-	FORCEINLINE_DEBUGGABLE FVector2D ConvertTileIJToTileCenterWorldLocation(const FIntVector2& IJ);
+	FORCEINLINE FVector2D ConvertTileIJToTileCenterWorldLocation(const FIntVector2& IJ);
 
-	FORCEINLINE_DEBUGGABLE FIntVector2 ConvertGridLocationToTileIJ(const FVector2f& GridLocation);
+	FORCEINLINE FIntVector2 ConvertGridLocationToTileIJ(const FVector2f& GridLocation);
 
-	FORCEINLINE_DEBUGGABLE FIntVector2 ConvertWorldLocationToTileIJ(const FVector2D& WorldLocation);
+	FORCEINLINE FIntVector2 ConvertWorldLocationToTileIJ(const FVector2D& WorldLocation);
 
-	FORCEINLINE_DEBUGGABLE bool IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight);
+	FORCEINLINE bool IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight);
 
-	FORCEINLINE_DEBUGGABLE void ExecuteDDAVisibilityCheck(float ObserverHeight, FIntVector2 LocalIJ, FIntVector2 OriginLocalIJ, FVisionUnitData& VisionUnitData);
+	FORCEINLINE void ExecuteDDAVisibilityCheck(float ObserverHeight, FIntVector2 LocalIJ, FIntVector2 OriginLocalIJ, FVisionUnitData& VisionUnitData);
 
-protected:
+public:
 	UPROPERTY(VisibleInstanceOnly)
 	FVector2D GridSize = FVector2D::Zero();
 
@@ -212,32 +180,32 @@ protected:
 
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(VisibleInstanceOnly, Category = "FogOfWar|Textures")
-	UTexture2D* HeightmapTexture = nullptr;
+	TObjectPtr<UTexture2D> HeightmapTexture = nullptr;
 #endif
 
 	UPROPERTY(VisibleInstanceOnly, Category = "FogOfWar|Textures")
-	UTexture2D* SnapshotTexture = nullptr;
+	TObjectPtr<UTexture2D> SnapshotTexture = nullptr;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "FogOfWar|Textures")
-	UTextureRenderTarget2D* VisibilityTextureRenderTarget = nullptr;
+	TObjectPtr<UTextureRenderTarget2D> VisibilityTextureRenderTarget = nullptr;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "FogOfWar|Textures")
-	UTextureRenderTarget2D* PreFinalVisibilityTextureRenderTarget = nullptr;
+	TObjectPtr<UTextureRenderTarget2D> PreFinalVisibilityTextureRenderTarget = nullptr;
 
 	UPROPERTY(VisibleInstanceOnly, Category = "FogOfWar|Textures")
-	UTextureRenderTarget2D* FinalVisibilityTextureRenderTarget = nullptr;
+	TObjectPtr<UTextureRenderTarget2D> FinalVisibilityTextureRenderTarget = nullptr;
 
 	UPROPERTY()
-	UMaterialInstanceDynamic* InterpolationMID;
+	TObjectPtr<UMaterialInstanceDynamic> InterpolationMID;
 
 	UPROPERTY()
-	UMaterialInstanceDynamic* AfterInterpolationMID;
+	TObjectPtr<UMaterialInstanceDynamic> AfterInterpolationMID;
 
 	UPROPERTY()
-	UMaterialInstanceDynamic* SuperSamplingMID;
+	TObjectPtr<UMaterialInstanceDynamic> SuperSamplingMID;
 
 	UPROPERTY()
-	UMaterialInstanceDynamic* PostProcessingMID;
+	TObjectPtr<UMaterialInstanceDynamic> PostProcessingMID;
 
 	TArray<FTile> Tiles;
 
