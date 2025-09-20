@@ -5,6 +5,7 @@
 #include "MassExecutionContext.h" // Required for FMassExecutionContext
 #include "MassProcessor.h"
 #include "MassRepresentationFragments.h" // For FMassVisibilityFragment
+#include "Subsystems/MinimapDataSubsystem.h"
 #include "MassFogOfWarProcessors.generated.h"
 
 class AFogOfWar;
@@ -160,5 +161,33 @@ protected:
 private:
 	TObjectPtr<AFogOfWar> FogOfWarActor;
 	FMassEntityQuery EntityQuery;
+};
+
+/**
+ * @class UMinimapDataCollectorProcessor
+ * @brief 收集小地图所需的数据并缓存到 UMinimapDataSubsystem 中。
+ */
+UCLASS()
+class FOGOFWAR_API UMinimapDataCollectorProcessor : public UMassProcessor
+{
+	GENERATED_BODY()
+
+public:
+	UMinimapDataCollectorProcessor();
+
+protected:
+	virtual void Initialize(UObject& Owner) override;
+	virtual void ConfigureQueries() override;
+	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+
+private:
+	// 指向数据仓库的指针
+	TObjectPtr<UMinimapDataSubsystem> MinimapDataSubsystem;
+
+	// 查询1：获取所有视野源
+	FMassEntityQuery VisionSourcesQuery;
+
+	// 查询2：获取所有需要在小地图上表示的单位图标
+	FMassEntityQuery RepresentationQuery;
 };
 

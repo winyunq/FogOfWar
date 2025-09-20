@@ -186,3 +186,26 @@ struct FOGOFWAR_API FMassPreviousVisionFragment : public FMassFragment
 	UPROPERTY()
 	FVisionUnitData PreviousVisionData;
 };
+
+/**
+ * @struct FMassMinimapRepresentationFragment
+ * @brief 存储单位在小地图上的表示信息。
+ * @details 包含了在小地图上绘制单位图标所需的颜色、尺寸等数据。
+ */
+USTRUCT()
+struct FOGOFWAR_API FMassMinimapRepresentationFragment : public FMassFragment
+{
+    GENERATED_BODY()
+
+    /// @brief 图标在小地图上显示的颜色。
+    UPROPERTY(EditAnywhere, Category = "Minimap Representation")
+    FLinearColor IconColor = FLinearColor::White;
+
+    /// @brief 图标的尺寸（世界单位下的边长）。对于点状图标，可以设为很小的值。
+    UPROPERTY(EditAnywhere, Category = "Minimap Representation")
+    float IconSize = 25.0f;
+
+    /// @brief 强度/亮度。可用于在着色器中实现堆叠单位时亮度叠加的效果。
+    UPROPERTY(EditAnywhere, Category = "Minimap Representation")
+    float Intensity = 1.0f;
+};

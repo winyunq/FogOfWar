@@ -389,3 +389,74 @@ void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMass
 		}
 	});
 }
+
+//----------------------------------------------------------------------//
+//  UMinimapDataCollectorProcessor
+//----------------------------------------------------------------------//
+
+UMinimapDataCollectorProcessor::UMinimapDataCollectorProcessor()
+	: VisionSourcesQuery(*this)
+	, RepresentationQuery(*this)
+{
+	bAutoRegisterWithProcessingPhases = true;
+	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
+
+void UMinimapDataCollectorProcessor::Initialize(UObject& Owner)
+{
+	Super::Initialize(Owner);
+	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+}
+
+void UMinimapDataCollectorProcessor::ConfigureQueries()
+{
+	// 查询1：获取所有视野源
+    VisionSourcesQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+    VisionSourcesQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
+    VisionSourcesQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
+    VisionSourcesQuery.RegisterWithProcessor(*this);
+
+    // 查询2：获取所有需要被表示的单位图标
+    RepresentationQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+    RepresentationQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+    RepresentationQuery.RegisterWithProcessor(*this);
+}
+
+void UMinimapDataCollectorProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+	if (!MinimapDataSubsystem)
+	{
+		return;
+	}
+
+	// 清空上一帧的数据
+	MinimapDataSubsystem->VisionSources.Reset();
+	MinimapDataSubsystem->IconLocations.Reset();
+	MinimapDataSubsystem->IconColors.Reset();
+
+	// 运行查询并填充数据
+	VisionSourcesQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	{
+		const auto& LocationList = Context.GetFragmentView<FTransformFragment>();
+		const auto& VisionList = Context.GetFragmentView<FMassVisionFragment>();
+		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
+		{
+			const FVector& Location = LocationList[i].GetTransform().GetLocation();
+			const float Radius = VisionList[i].SightRadius;
+			MinimapDataSubsystem->VisionSources.Add(FVector4(Location.X, Location.Y, Location.Z, Radius));
+		}
+	});
+
+	RepresentationQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	{
+		const auto& LocationList = Context.GetFragmentView<FTransformFragment>();
+		const auto& RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
+		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
+		{
+			const FVector& Location = LocationList[i].GetTransform().GetLocation();
+            const auto& RepFragment = RepList[i];
+			MinimapDataSubsystem->IconLocations.Add(FVector4(Location.X, Location.Y, RepFragment.IconSize, RepFragment.Intensity));
+            MinimapDataSubsystem->IconColors.Add(RepFragment.IconColor);
+		}
+	});
+}

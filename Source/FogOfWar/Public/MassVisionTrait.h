@@ -18,28 +18,34 @@
  * 它会将FMassVisionFragment（视野参数）、FMassPreviousVisionFragment（用于清除旧视野）、
  * FMassVisionEntityTag（标记为视野提供者）和FMassVisibleEntityTag（标记为可被看见）添加到实体上。
  */
-UCLASS(meta = (DisplayName = "Winyunq|视野和迷雾"))
+UCLASS(BlueprintType, Blueprintable)
 class FOGOFWAR_API UMassVisionTrait : public UMassEntityTraitBase
 {
 	GENERATED_BODY()
 
 public:
-	/**
-	 * @brief       在构建实体模板时修改模板。
-	 * @details     此函数是Trait的核心，在Mass实体模板创建时被调用。
-	 *              它负责向模板添加所有必要的Fragments和Tags。
-	 *
-	 * @param       BuildContext                   数据类型: FMassEntityTemplateBuildContext&
-	 * @details     实体模板的构建上下文，用于添加Fragments, Tags等。
-	 * @param       World                          数据类型: const UWorld&
-	 * @details     当前世界的引用。
-	 */
 	virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
 
 protected:
-	/// @brief 视野参数
-	/// @details 在Mass原型编辑器中配置的视野参数。
-	/// 这些参数将被作为 FMassVisionFragment 添加到实体上。
-	UPROPERTY(EditAnywhere, Category = "Fog of War")
-	FMassVisionFragment VisionParams;
+	// --- 视野属性 (Vision Properties) ---
+	/** 该单位的视野半径（用于计算战争迷雾）。设为0则不提供视野。*/
+	UPROPERTY(EditAnywhere, Category = "Vision", meta = (ClampMin = "0.0"))
+	float SightRadius = 1000.0f;
+
+	// --- 小地图表示属性 (Minimap Representation Properties) ---
+	/** 是否在小地图上显示该单位的图标。*/
+	UPROPERTY(EditAnywhere, Category = "Minimap")
+	bool bShouldBeRepresentedOnMinimap = true;
+
+	/** 图标的颜色。*/
+	UPROPERTY(EditAnywhere, Category = "Minimap", meta = (EditCondition = "bShouldBeRepresentedOnMinimap"))
+	FLinearColor MinimapIconColor = FLinearColor::White;
+
+	/** 图标的尺寸（世界单位）。*/
+	UPROPERTY(EditAnywhere, Category = "Minimap", meta = (EditCondition = "bShouldBeRepresentedOnMinimap", ClampMin = "0.0"))
+	float MinimapIconSize = 25.0f;
+
+	/** （高级）是否让该单位的图标无视战争迷雾，始终在小地图上可见？（例如任务单位）*/
+	UPROPERTY(EditAnywhere, Category = "Minimap", meta = (EditCondition = "bShouldBeRepresentedOnMinimap"))
+	bool bAlwaysVisibleOnMinimap = false;
 };

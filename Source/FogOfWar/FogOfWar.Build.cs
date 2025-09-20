@@ -47,6 +47,8 @@ public class FogOfWar : ModuleRules
 				"MassCommon",
 				"RHI",
 				"RenderCore",
+				"UMG", // Needed for UUserWidget
+				"InputCore", // Needed for EKeys
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);
