@@ -7,6 +7,8 @@
 #include "MassExecutionContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "Containers/StringView.h"
+#include "MassRepresentationProcessor.h" // 包含 UMassVisibilityProcessor 的定义
+#include "MassRepresentationFragments.h" // 包含 FMassVisibilityFragment 的定义
 
 //----------------------------------------------------------------------//
 // FFogOfWarMassHelpers
@@ -287,6 +289,7 @@ void UInitialVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 }
 
 
+
 //----------------------------------------------------------------------//
 //  UVisionProcessor
 //----------------------------------------------------------------------//
@@ -296,6 +299,7 @@ UVisionProcessor::UVisionProcessor()
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 	ExecutionOrder.ExecuteAfter.Add(UInitialVisionProcessor::StaticClass()->GetFName()); // Ensure initial vision runs first
+	// ExecutionOrder.ExecuteAfter.Add(UMassVisibilityProcessor::StaticClass()->GetFName()); // Ensure vision update runs after visibility processor
 }
 
 void UVisionProcessor::Initialize(UObject& Owner)
@@ -310,6 +314,13 @@ void UVisionProcessor::ConfigureQueries()
     EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousVisionFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddTagRequirement<FMassLocationChangedTag>(EMassFragmentPresence::All); // Only process entities that have moved
+
+	// --- 核心修复 ---
+	// 只处理未被剔除的实体.
+	// 即：实体不能有“被距离剔除”的Tag，也不能有“被视锥体剔除”的Tag。
+	EntityQuery.AddTagRequirement<FMassVisibilityCulledByDistanceTag>(EMassFragmentPresence::None);
+	EntityQuery.AddTagRequirement<FMassVisibilityCulledByFrustumTag>(EMassFragmentPresence::None);
+
 	EntityQuery.RegisterWithProcessor(*this);
 }
 
@@ -329,6 +340,52 @@ void UVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 		for (const FMassEntityHandle& Entity : Entities)
 		{
 			Context.Defer().RemoveTag<FMassLocationChangedTag>(Entity);
+		}
+	});
+}
+
+//----------------------------------------------------------------------//
+//  UDebugStressTestProcessor
+//----------------------------------------------------------------------//
+UDebugStressTestProcessor::UDebugStressTestProcessor()
+	: EntityQuery(*this)
+{
+	bAutoRegisterWithProcessingPhases = true;
+	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+	// 必须在 UVisionProcessor 之前运行
+	ExecutionOrder.ExecuteBefore.Add(UVisionProcessor::StaticClass()->GetFName());
+}
+
+void UDebugStressTestProcessor::Initialize(UObject& Owner)
+{
+	Super::Initialize(Owner);
+	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+}
+
+void UDebugStressTestProcessor::ConfigureQueries()
+{
+	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
+	// 我们需要查询所有可见单位，无论它们是否已改变位置
+	// EntityQuery.AddConstSharedRequirement<FMassVisibilityFragment>(EMassFragmentPresence::All);
+	EntityQuery.RegisterWithProcessor(*this);
+}
+
+void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated() || !FogOfWarActor->bDebugStressTestIgnoreCache)
+	{
+		// 如果压力测试模式关闭，则此处理器不执行任何操作
+		return;
+	}
+
+	// 为查询到的所有实体添加 FMassLocationChangedTag，以强制后续的 UVisionProcessor 进行处理
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	{
+		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
+		for (const FMassEntityHandle& Entity : Entities)
+		{
+			Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
 		}
 	});
 }

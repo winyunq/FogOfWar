@@ -29,6 +29,9 @@ public class FogOfWar : ModuleRules
 				"MassEntity", // Moved to Public
 				"MassMovement", // Moved to Public
 				"MassSpawner", // For UMassEntityTraitBase
+				"MassRepresentation", // Needed for FMassVisibilityFragment
+				"MassSignals", // Often used in modern Mass development
+				"MassLOD", // Required for LOD-based culling tags
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);

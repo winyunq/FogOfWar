@@ -2,6 +2,7 @@
 
 #include "MassVisionTrait.h"
 #include "MassEntityTemplateRegistry.h"
+#include "MassRepresentationFragments.h" // For FMassRepresentationFragment
 
 void UMassVisionTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
 {
@@ -16,4 +17,11 @@ void UMassVisionTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildConte
 	
 	// Add the tag to mark this entity as something that can be seen by others
 	BuildContext.AddTag<FMassVisibleEntityTag>();
+
+	// // Add visibility fragment
+	// BuildContext.AddFragment<FMassVisibilityFragment>();
+
+	// // Add representation fragment and set its bounds based on SightRadius for frustum culling
+	// FMassRepresentationFragment& RepresentationFragment = BuildContext.AddFragment_GetRef<FMassRepresentationFragment>();
+	// 	RepresentationFragment.Bounds = FBox(FVector(-SightRadius, -SightRadius, -SightRadius), FVector(SightRadius, SightRadius, SightRadius));
 }
