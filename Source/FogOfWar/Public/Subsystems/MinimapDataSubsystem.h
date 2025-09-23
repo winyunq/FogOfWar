@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "MassSubsystemBase.h"
+#include "MassEntityTypes.h" // Required for FMassEntityHandle
 #include "MinimapDataSubsystem.generated.h"
 
 /**
@@ -21,14 +22,11 @@ class FOGOFWAR_API UMinimapDataSubsystem : public UMassSubsystemBase
 public:
 
 	/** 所有视野提供者的缓存数据 (位置X, Y, Z, 视野半径W) */
-	UPROPERTY(BlueprintReadOnly, Category = "Minimap Data")
-	TArray<FVector4> VisionSources;
+	TMap<FMassEntityHandle, FVector4> VisionSources;
 
 	/** 所有小地图图标的位置数据 (位置X, Y, 尺寸Z, 强度W) */
-	UPROPERTY(BlueprintReadOnly, Category = "Minimap Data")
-	TArray<FVector4> IconLocations;
+	TMap<FMassEntityHandle, FVector4> IconLocations;
 
-	/** 所有小地图图标的颜色数据 */
-	UPROPERTY(BlueprintReadOnly, Category = "Minimap Data")
-	TArray<FLinearColor> IconColors;
+	/** 所有小地图图标的颜色数据 (R, G, B, A) */
+	TMap<FMassEntityHandle, FLinearColor> IconColors;
 };

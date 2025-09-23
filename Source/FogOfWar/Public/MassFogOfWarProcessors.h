@@ -164,16 +164,37 @@ private:
 };
 
 /**
- * @class UMinimapDataCollectorProcessor
- * @brief 收集小地图所需的数据并缓存到 UMinimapDataSubsystem 中。
+ * @class UMinimapAddProcessor
+ * @brief 观察新实体的创建，并将其添加到 UMinimapDataSubsystem 中。
  */
 UCLASS()
-class FOGOFWAR_API UMinimapDataCollectorProcessor : public UMassProcessor
+class FOGOFWAR_API UMinimapAddProcessor : public UMassObserverProcessor
 {
 	GENERATED_BODY()
 
 public:
-	UMinimapDataCollectorProcessor();
+	UMinimapAddProcessor();
+
+protected:
+	virtual void ConfigureQueries() override;
+	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+
+private:
+	FMassEntityQuery EntityQuery;
+};
+
+
+/**
+ * @class UMinimapUpdateProcessor
+ * @brief 收集小地图所需的数据并缓存到 UMinimapDataSubsystem 中。
+ */
+UCLASS()
+class FOGOFWAR_API UMinimapUpdateProcessor : public UMassProcessor
+{
+	GENERATED_BODY()
+
+public:
+	UMinimapUpdateProcessor();
 
 protected:
 	virtual void Initialize(UObject& Owner) override;
@@ -209,4 +230,6 @@ private:
 	TObjectPtr<AFogOfWar> FogOfWarActor;
 	FMassEntityQuery EntityQuery;
 };
+
+
 

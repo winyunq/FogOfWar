@@ -106,6 +106,10 @@ protected:
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Minimap|Internal")
 	TObjectPtr<UTexture2D> IconDataTexture;
 
+	/** [数据纹理] 缓存图标颜色数据的动态纹理 */
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Minimap|Internal")
+	TObjectPtr<UTexture2D> IconColorTexture;
+
 	/** 指向数据仓库的指针 */
 	UPROPERTY(Transient)
 	TObjectPtr<UMinimapDataSubsystem> MinimapDataSubsystem;

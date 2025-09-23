@@ -236,3 +236,6 @@ struct FOGOFWAR_API FMassPreviousMinimapCellFragment : public FMassFragment
 	UPROPERTY()
 	FIntPoint PrevCellCoords = FIntPoint(INT_MIN, INT_MIN);
 };
+
+
+
