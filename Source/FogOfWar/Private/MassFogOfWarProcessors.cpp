@@ -489,31 +489,31 @@ void UMinimapObserverProcessor::Execute(FMassEntityManager& EntityManager, FMass
 
 	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, &Context](FMassExecutionContext& ChunkContext)
 	{
-		const TConstArrayView<FTransformFragment> Locations = ChunkContext.GetFragmentView<FTransformFragment>();
-		const TArrayView<FMassPreviousMinimapCellFragment> PrevCells = ChunkContext.GetMutableFragmentView<FMassPreviousMinimapCellFragment>();
+		// const TConstArrayView<FTransformFragment> Locations = ChunkContext.GetFragmentView<FTransformFragment>();
+		// const TArrayView<FMassPreviousMinimapCellFragment> PrevCells = ChunkContext.GetMutableFragmentView<FMassPreviousMinimapCellFragment>();
 
-		for (int32 i = 0; i < ChunkContext.GetNumEntities(); ++i)
-		{
-			const FVector& WorldLocation = Locations[i].GetTransform().GetLocation();
-			FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCells[i];
+		// for (int32 i = 0; i < ChunkContext.GetNumEntities(); ++i)
+		// {
+		// 	const FVector& WorldLocation = Locations[i].GetTransform().GetLocation();
+		// 	FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCells[i];
 
-			// 注意：这里的格子计算需要与小地图渲染材质中的逻辑完全一致。
-			// 为了简化，我们假设小地图与主FOW网格使用相同的坐标系，但分辨率可能不同。
-			// 这里我们直接复用AFogOfWar的坐标转换函数。
-			const FVector2D Location2D(WorldLocation.X, WorldLocation.Y);
+		// 	// 注意：这里的格子计算需要与小地图渲染材质中的逻辑完全一致。
+		// 	// 为了简化，我们假设小地图与主FOW网格使用相同的坐标系，但分辨率可能不同。
+		// 	// 这里我们直接复用AFogOfWar的坐标转换函数。
+		// 	const FVector2D Location2D(WorldLocation.X, WorldLocation.Y);
 
-			// 使用 FIntPoint 的构造函数进行显式转换
-			const FIntPoint CurrentCell(FogOfWarActor->ConvertWorldLocationToTileIJ(Location2D));
-			if (CurrentCell != PrevCellFragment.PrevCellCoords)
-			{
-				Context.Defer().AddTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
-				PrevCellFragment.PrevCellCoords = CurrentCell;
-			}
-			else
-			{
-				// 如果没有移动出格子，确保移除Tag
-				Context.Defer().RemoveTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
-			}
-		}
+		// 	// 使用 FIntPoint 的构造函数进行显式转换
+		// 	const FIntPoint CurrentCell(FogOfWarActor->ConvertWorldLocationToTileIJ(Location2D));
+		// 	if (CurrentCell != PrevCellFragment.PrevCellCoords)
+		// 	{
+		// 		Context.Defer().AddTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
+		// 		PrevCellFragment.PrevCellCoords = CurrentCell;
+		// 	}
+		// 	else
+		// 	{
+		// 		// 如果没有移动出格子，确保移除Tag
+		// 		Context.Defer().RemoveTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
+		// 	}
+		// }
 	});
 }

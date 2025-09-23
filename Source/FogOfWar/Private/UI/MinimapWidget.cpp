@@ -100,7 +100,7 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 
 						// 创建渲染目标和数据纹理						if (!MinimapRenderTarget)
 						{
-							MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::PF_A32B32G32R32F);
+							MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::RTF_RGBA8);
 						}
 						if (!VisionDataTexture)
 						{
@@ -142,7 +142,8 @@ FVector UMinimapWidget::ConvertMinimapUVToWorldLocation(const FVector2D& UVPosit
 		(0.5f - UVPosition.Y) * FogOfWarActor->GridSize.X, // UI V (反转后) -> World X
 		UVPosition.X * FogOfWarActor->GridSize.Y           // UI U -> World Y
 	);
-	UE_LOG(LogMinimapWidget, Log, TEXT("Camera jump to: %s"), WorldLocation2D.ToString());
+		// 正确的代码
+	UE_LOG(LogMinimapWidget, Log, TEXT("Camera jump to: %s"), *WorldLocation2D.ToString());
 	return FVector(WorldLocation2D, 0.0f);
 }
 
@@ -178,7 +179,7 @@ void UMinimapWidget::JumpToMousePointOnMinimap(const FVector2D& ScreenPosition, 
 	const FVector2D LocalSize = WidgetGeometry.GetLocalSize();
 
 	// 确保点击在图片范围内
-	// if (LocalPosition.X >= 0 && LocalPosition.Y >= 0 && LocalPosition.X <= LocalSize.X && LocalPosition.Y <= LocalSize.Y)
+	// if (LocalPosition.X >= 0 && LocalPosition.Y >= -LocalSize.Y/2 && LocalPosition.X <= LocalSize.X && LocalPosition.Y <= LocalSize.Y/2)
 	{
 		const FVector2D UV = LocalPosition / LocalSize;
 		const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
@@ -242,7 +243,7 @@ void UMinimapWidget::OnMinimapButtonPressed()
 		bIsMinimapButtonHeld = true; // Set flag
 		FVector2D MousePosition;
 		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
-		JumpToMousePointOnMinimap(MousePosition, this->GetCachedGeometry()); // Use UMinimapWidget's geometry
+		JumpToMousePointOnMinimap(MousePosition, this->MinimapButton->GetCachedGeometry()); // Use UMinimapWidget's geometry
 	}
 }
 
@@ -253,7 +254,7 @@ void UMinimapWidget::OnMinimapButtonReleased()
 		bIsMinimapButtonHeld = false; // Clear flag
 		FVector2D MousePosition;
 		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
-		JumpToMousePointOnMinimap(MousePosition, this->GetCachedGeometry()); // Use UMinimapWidget's geometry
+		JumpToMousePointOnMinimap(MousePosition, this->MinimapButton->GetCachedGeometry()); // Use UMinimapWidget's geometry
 	}
 }
 
