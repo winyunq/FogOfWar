@@ -5,17 +5,19 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "MassEntityTypes.h"
+#include "RTSCamera.h"
+#include "Components/Button.h" // Added for UButton
 #include "MinimapWidget.generated.h"
 
 class UImage;
+class UButton; // Forward declaration for UButton
 class UTextureRenderTarget2D;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UMinimapDataSubsystem;
 class AFogOfWar;
 
-// 声明委托：当小地图被鼠标按下或弹起时广播
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapPointerAction, const FVector&, WorldLocation);
+// 声明委托
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapDrag, const FVector&, WorldLocationDelta);
 
 /**
@@ -50,16 +52,14 @@ protected:
 	// 核心更新函数
 	void UpdateMinimapTexture();
 
+	UFUNCTION() void OnMinimapButtonPressed(); // Added for UButton
+	UFUNCTION() void OnMinimapButtonReleased(); // Added for UButton
+
+	// 将相机移动到小地图上的鼠标点击位置
+	void JumpToMousePointOnMinimap(const FVector2D& ScreenPosition, const FGeometry& WidgetGeometry);
+
 public:
 	// --- 事件回调 (Event Callbacks) ---
-
-	/** 当鼠标在小地图上按下时广播。返回点击处对应的世界坐标。*/
-	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
-	FOnMinimapPointerAction OnMinimapPointerDown;
-
-	/** 当鼠标在小地图上弹起时广播。返回点击处对应的世界坐标。*/
-	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
-	FOnMinimapPointerAction OnMinimapPointerUp;
 
 	/** 当鼠标在小地图上拖动时广播。返回拖动的世界坐标增量。*/
 	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
@@ -86,6 +86,10 @@ protected:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UImage> MinimapImage;
 
+	/** 【自动绑定】请在UMG编辑器中，将您的Button控件命名为'MinimapButton'，并放置在MinimapImage上方 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UButton> MinimapButton; // Added for UButton
+
 	/** 渲染目标（RT）*/
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Minimap|Internal")
 	TObjectPtr<UTextureRenderTarget2D> MinimapRenderTarget;
@@ -110,10 +114,16 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<AFogOfWar> FogOfWarActor;
 
+	UPROPERTY(Transient)
+	TObjectPtr<class URTSCamera> RTSCameraComponent;
+
 	// Tick更新频率控制器
 	float TimeSinceLastUpdate = 0.0f;
 
 	// 拖动状态
 	bool bIsDragging = false;
 	FVector2D LastMousePosition = FVector2D::ZeroVector;
+
+	// 按钮按住状态
+	bool bIsMinimapButtonHeld = false; // <-- Add this line
 };

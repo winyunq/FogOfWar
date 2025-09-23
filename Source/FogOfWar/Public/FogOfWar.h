@@ -184,6 +184,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
 	bool bDebugStressTestIgnoreCache = false;
 
+	/// @brief 【调试】压力测试模式，强制每帧更新所有单位的小地图数据。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
+	bool bDebugStressTestMinimap = false;
+
 	/// @brief 【调试】在调试高度图纹理时使用最近邻过滤，而不是线性过滤。
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
 	bool bDebugFilterNearest = false;

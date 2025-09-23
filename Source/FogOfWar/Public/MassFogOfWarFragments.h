@@ -209,3 +209,30 @@ struct FOGOFWAR_API FMassMinimapRepresentationFragment : public FMassFragment
     UPROPERTY(EditAnywhere, Category = "Minimap Representation")
     float Intensity = 1.0f;
 };
+
+/**
+ * @struct FMinimapCellChangedTag
+ * @brief [OPTIMIZATION] 标记一个实体的小地图格子坐标自上次检查后已发生改变。
+ * @details 这是一个由 UMinimapObserverProcessor 动态添加和移除的临时标签。
+ * 小地图数据收集器只查询带有此标签的实体，从而确保只为跨越了格子边界的单位更新数据。
+ */
+USTRUCT()
+struct FOGOFWAR_API FMinimapCellChangedTag : public FMassTag
+{
+	GENERATED_BODY()
+};
+
+/**
+ * @struct FMassPreviousMinimapCellFragment
+ * @brief [OPTIMIZATION] 存储实体在上一帧所在的小地图格子坐标。
+ * @details UMinimapObserverProcessor 使用此Fragment来检测单位是否移动到了新的小地图格子。
+ */
+USTRUCT()
+struct FOGOFWAR_API FMassPreviousMinimapCellFragment : public FMassFragment
+{
+	GENERATED_BODY()
+
+	/// @brief 上一次记录的小地图格子坐标。
+	UPROPERTY()
+	FIntPoint PrevCellCoords = FIntPoint(INT_MIN, INT_MIN);
+};

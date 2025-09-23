@@ -184,10 +184,29 @@ private:
 	// 指向数据仓库的指针
 	TObjectPtr<UMinimapDataSubsystem> MinimapDataSubsystem;
 
-	// 查询1：获取所有视野源
-	FMassEntityQuery VisionSourcesQuery;
-
-	// 查询2：获取所有需要在小地图上表示的单位图标
+	// 查询：获取所有需要在小地图上表示的单位图标
 	FMassEntityQuery RepresentationQuery;
+};
+
+/**
+ * @class UMinimapObserverProcessor
+ * @brief [OPTIMIZATION] 观察实体位置变化，并在实体跨越小地图格子时添加Tag。
+ */
+UCLASS()
+class FOGOFWAR_API UMinimapObserverProcessor : public UMassObserverProcessor
+{
+	GENERATED_BODY()
+
+public:
+	UMinimapObserverProcessor();
+
+protected:
+	virtual void Initialize(UObject& Owner) override;
+	virtual void ConfigureQueries() override;
+	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+
+private:
+	TObjectPtr<AFogOfWar> FogOfWarActor;
+	FMassEntityQuery EntityQuery;
 };
 

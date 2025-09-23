@@ -373,19 +373,32 @@ void UDebugStressTestProcessor::ConfigureQueries()
 
 void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated() || !FogOfWarActor->bDebugStressTestIgnoreCache)
+	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
 	{
-		// 如果压力测试模式关闭，则此处理器不执行任何操作
 		return;
 	}
 
-	// 为查询到的所有实体添加 FMassLocationChangedTag，以强制后续的 UVisionProcessor 进行处理
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	const bool bForceVisionUpdate = FogOfWarActor->bDebugStressTestIgnoreCache;
+	const bool bForceMinimapUpdate = FogOfWarActor->bDebugStressTestMinimap;
+
+	if (!bForceVisionUpdate && !bForceMinimapUpdate)
+	{
+		return;
+	}
+
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
 	{
 		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
 		for (const FMassEntityHandle& Entity : Entities)
 		{
-			Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
+			if (bForceVisionUpdate)
+			{
+				Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
+			}
+			if (bForceMinimapUpdate)
+			{
+				Context.Defer().AddTag<FMinimapCellChangedTag>(Entity);
+			}
 		}
 	});
 }
@@ -395,11 +408,12 @@ void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMass
 //----------------------------------------------------------------------//
 
 UMinimapDataCollectorProcessor::UMinimapDataCollectorProcessor()
-	: VisionSourcesQuery(*this)
-	, RepresentationQuery(*this)
+	: RepresentationQuery(*this)
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+	// 在观察者之后运行，确保Tag已经被正确更新
+	ExecutionOrder.ExecuteAfter.Add(UMinimapObserverProcessor::StaticClass()->GetFName());
 }
 
 void UMinimapDataCollectorProcessor::Initialize(UObject& Owner)
@@ -410,15 +424,10 @@ void UMinimapDataCollectorProcessor::Initialize(UObject& Owner)
 
 void UMinimapDataCollectorProcessor::ConfigureQueries()
 {
-	// 查询1：获取所有视野源
-    VisionSourcesQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
-    VisionSourcesQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
-    VisionSourcesQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
-    VisionSourcesQuery.RegisterWithProcessor(*this);
-
-    // 查询2：获取所有需要被表示的单位图标
+    // 只查询那些需要在小地图上表示，并且其格子位置已发生变化的单位
     RepresentationQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
     RepresentationQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+	RepresentationQuery.AddTagRequirement<FMinimapCellChangedTag>(EMassFragmentPresence::All); // 核心优化
     RepresentationQuery.RegisterWithProcessor(*this);
 }
 
@@ -429,23 +438,9 @@ void UMinimapDataCollectorProcessor::Execute(FMassEntityManager& EntityManager, 
 		return;
 	}
 
-	// 清空上一帧的数据
-	MinimapDataSubsystem->VisionSources.Reset();
+	// 使用“脏”单位的数据去完整覆盖Subsystem中的数据
 	MinimapDataSubsystem->IconLocations.Reset();
 	MinimapDataSubsystem->IconColors.Reset();
-
-	// 运行查询并填充数据
-	VisionSourcesQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
-	{
-		const auto& LocationList = Context.GetFragmentView<FTransformFragment>();
-		const auto& VisionList = Context.GetFragmentView<FMassVisionFragment>();
-		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
-		{
-			const FVector& Location = LocationList[i].GetTransform().GetLocation();
-			const float Radius = VisionList[i].SightRadius;
-			MinimapDataSubsystem->VisionSources.Add(FVector4(Location.X, Location.Y, Location.Z, Radius));
-		}
-	});
 
 	RepresentationQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
 	{
@@ -455,8 +450,70 @@ void UMinimapDataCollectorProcessor::Execute(FMassEntityManager& EntityManager, 
 		{
 			const FVector& Location = LocationList[i].GetTransform().GetLocation();
             const auto& RepFragment = RepList[i];
+
 			MinimapDataSubsystem->IconLocations.Add(FVector4(Location.X, Location.Y, RepFragment.IconSize, RepFragment.Intensity));
             MinimapDataSubsystem->IconColors.Add(RepFragment.IconColor);
+		}
+	});
+}
+
+//----------------------------------------------------------------------//
+//  UMinimapObserverProcessor
+//----------------------------------------------------------------------//
+UMinimapObserverProcessor::UMinimapObserverProcessor()
+{
+	ObservedType = FTransformFragment::StaticStruct();
+	Operation = EMassObservedOperation::MAX;
+	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
+
+void UMinimapObserverProcessor::Initialize(UObject& Owner)
+{
+	Super::Initialize(Owner);
+	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+}
+
+void UMinimapObserverProcessor::ConfigureQueries()
+{
+	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadWrite);
+	EntityQuery.RegisterWithProcessor(*this);
+}
+
+void UMinimapObserverProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
+	if (!FogOfWarActor)
+	{
+		return;
+	}
+
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, &Context](FMassExecutionContext& ChunkContext)
+	{
+		const TConstArrayView<FTransformFragment> Locations = ChunkContext.GetFragmentView<FTransformFragment>();
+		const TArrayView<FMassPreviousMinimapCellFragment> PrevCells = ChunkContext.GetMutableFragmentView<FMassPreviousMinimapCellFragment>();
+
+		for (int32 i = 0; i < ChunkContext.GetNumEntities(); ++i)
+		{
+			const FVector& WorldLocation = Locations[i].GetTransform().GetLocation();
+			FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCells[i];
+
+			// 注意：这里的格子计算需要与小地图渲染材质中的逻辑完全一致。
+			// 为了简化，我们假设小地图与主FOW网格使用相同的坐标系，但分辨率可能不同。
+			// 这里我们直接复用AFogOfWar的坐标转换函数。
+			const FVector2D Location2D(WorldLocation.X, WorldLocation.Y);
+
+			// 使用 FIntPoint 的构造函数进行显式转换
+			const FIntPoint CurrentCell(FogOfWarActor->ConvertWorldLocationToTileIJ(Location2D));
+			if (CurrentCell != PrevCellFragment.PrevCellCoords)
+			{
+				Context.Defer().AddTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
+				PrevCellFragment.PrevCellCoords = CurrentCell;
+			}
+			else
+			{
+				// 如果没有移动出格子，确保移除Tag
+				Context.Defer().RemoveTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
+			}
 		}
 	});
 }

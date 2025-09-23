@@ -56,10 +56,74 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 			MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(FogOfWarActor->GridBottomLeftWorldLocation.X, FogOfWarActor->GridBottomLeftWorldLocation.Y, 0));
 			MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(FogOfWarActor->GridSize.X, FogOfWarActor->GridSize.Y, 0));
 		
-			UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar. GridBottomLeft: %s, GridSize: %s"), *FogOfWarActor->GridBottomLeftWorldLocation.ToString(), *FogOfWarActor->GridSize.ToString());
-		}
-		return true;
-	}
+						UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar. GridBottomLeft: %s, GridSize: %s"), *FogOfWarActor->GridBottomLeftWorldLocation.ToString(), *FogOfWarActor->GridSize.ToString());
+					}
+			
+					APlayerController* PlayerController = GetOwningPlayer();
+					if (PlayerController)
+					{
+						APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager;
+						if (CameraManager)
+						{
+							AActor* ViewTarget = CameraManager->GetViewTarget();
+							if (ViewTarget)
+							{
+								// If the ViewTarget is a Pawn, try to find the RTSCameraComponent on it.
+								APawn* ViewTargetPawn = Cast<APawn>(ViewTarget);
+								if (ViewTargetPawn)
+								{
+									RTSCameraComponent = ViewTargetPawn->FindComponentByClass<URTSCamera>();
+									if (!RTSCameraComponent)
+									{
+										UE_LOG(LogMinimapWidget, Warning, TEXT("UMinimapWidget: Could not find URTSCamera component on ViewTarget Pawn (%s)."), *ViewTargetPawn->GetName());
+									}
+								}
+								else
+								{
+									UE_LOG(LogMinimapWidget, Warning, TEXT("UMinimapWidget: ViewTarget (%s) is not a Pawn. Cannot find URTSCamera component."), *ViewTarget->GetName());
+								}
+							}
+							else
+							{
+								UE_LOG(LogMinimapWidget, Warning, TEXT("UMinimapWidget: PlayerCameraManager has no ViewTarget."));
+							}
+						}
+						else
+						{
+							UE_LOG(LogMinimapWidget, Warning, TEXT("UMinimapWidget: Could not get PlayerCameraManager."));
+						}
+					}
+					else
+					{
+						UE_LOG(LogMinimapWidget, Warning, TEXT("UMinimapWidget: Could not get owning PlayerController."));
+					}
+
+						// 创建渲染目标和数据纹理						if (!MinimapRenderTarget)
+						{
+							MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::PF_A32B32G32R32F);
+						}
+						if (!VisionDataTexture)
+						{
+							VisionDataTexture = CreateDynamicDataTexture(this, 128, 1); // 最多支持128个视野源
+						}
+						if (!IconDataTexture)
+						{
+							IconDataTexture = CreateDynamicDataTexture(this, 256, 1); // 最多支持256个图标
+						}
+			
+						if (MinimapMaterial)
+						{
+							MinimapMaterialInstance = UMaterialInstanceDynamic::Create(MinimapMaterial, this);
+							// 将数据纹理设置给材质
+							MinimapMaterialInstance->SetTextureParameterValue(TEXT("VisionDataTexture"), VisionDataTexture);
+							MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconDataTexture"), IconDataTexture);
+						}
+						else
+						{
+							UE_LOG(LogMinimapWidget, Warning, TEXT("MinimapMaterial is not set."));
+						}
+			
+					return true;	}
 	UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: AFogOfWar actor not found in the level."));
 	return false;
 }
@@ -71,48 +135,30 @@ FVector UMinimapWidget::ConvertMinimapUVToWorldLocation(const FVector2D& UVPosit
 		return FVector::ZeroVector;
 	}
 	// 坐标转换现在完全依赖于AFogOfWar的属性
-	const FVector2D WorldLocation2D = FogOfWarActor->GridBottomLeftWorldLocation + FVector2D(UVPosition.X * FogOfWarActor->GridSize.X, (1.0f - UVPosition.Y) * FogOfWarActor->GridSize.Y);
+	// 根据用户反馈：世界坐标系中 X 是“上”，Y 是“右”。
+	// UI UV 坐标系中 U (X) 是“右”，V (Y) 是“下”。
+	// 因此，需要将 UI 的 U 映射到世界的 Y，将 UI 的 V (反转后) 映射到世界的 X。
+	const FVector2D WorldLocation2D = FogOfWarActor->GridBottomLeftWorldLocation + FVector2D(
+		(0.5f - UVPosition.Y) * FogOfWarActor->GridSize.X, // UI V (反转后) -> World X
+		UVPosition.X * FogOfWarActor->GridSize.Y           // UI U -> World Y
+	);
+	UE_LOG(LogMinimapWidget, Log, TEXT("Camera jump to: %s"), WorldLocation2D.ToString());
 	return FVector(WorldLocation2D, 0.0f);
 }
 
-void UMinimapWidget::NativeConstruct()
-{
-	Super::NativeConstruct();
 
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-
-	// 创建渲染目标和数据纹理
-	if (!MinimapRenderTarget)
-	{
-		MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::RTF_RGBA8);
-	}
-	if (!VisionDataTexture)
-	{
-		VisionDataTexture = CreateDynamicDataTexture(this, 128, 1); // 最多支持128个视野源
-	}
-	if (!IconDataTexture)
-	{
-		IconDataTexture = CreateDynamicDataTexture(this, 256, 1); // 最多支持256个图标
-	}
-
-	if (MinimapMaterial)
-	{
-		MinimapMaterialInstance = UMaterialInstanceDynamic::Create(MinimapMaterial, this);
-		// 将数据纹理设置给材质
-		MinimapMaterialInstance->SetTextureParameterValue(TEXT("VisionDataTexture"), VisionDataTexture);
-		MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconDataTexture"), IconDataTexture);
-	}
-	else
-	{
-		UE_LOG(LogMinimapWidget, Warning, TEXT("MinimapMaterial is not set."));
-	}
-
-	// 注意：我们不再在这里设置笔刷
-}
 
 void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	// Continuous jump logic should always run if button is held
+	if (bIsMinimapButtonHeld && GetOwningPlayer())
+	{
+		FVector2D MousePosition;
+		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
+		JumpToMousePointOnMinimap(MousePosition, MyGeometry); // Use MyMimimapWidget's geometry)
+	}
 
 	TimeSinceLastUpdate += InDeltaTime;
 	if (TimeSinceLastUpdate < UpdateInterval && UpdateInterval > 0.0f)
@@ -124,28 +170,36 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	UpdateMinimapTexture();
 }
 
+// Helper function to jump camera to mouse point on minimap
+void UMinimapWidget::JumpToMousePointOnMinimap(const FVector2D& ScreenPosition, const FGeometry& WidgetGeometry)
+{
+	// 将绝对屏幕坐标转换为此控件的局部坐标
+	const FVector2D LocalPosition = WidgetGeometry.AbsoluteToLocal(ScreenPosition);
+	const FVector2D LocalSize = WidgetGeometry.GetLocalSize();
+
+	// 确保点击在图片范围内
+	// if (LocalPosition.X >= 0 && LocalPosition.Y >= 0 && LocalPosition.X <= LocalSize.X && LocalPosition.Y <= LocalSize.Y)
+	{
+		const FVector2D UV = LocalPosition / LocalSize;
+		const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
+		
+		if (RTSCameraComponent)
+		{
+			RTSCameraComponent->JumpTo(WorldLocation);
+		}
+	}
+}
+
 FReply UMinimapWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
 	// 只响应左键
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && MinimapImage)
 	{
-		// 将绝对屏幕坐标转换为此控件的局部坐标
-		const FVector2D LocalPosition = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
-		const FVector2D LocalSize = InGeometry.GetLocalSize();
-
-		// 确保点击在图片范围内
-		if (LocalPosition.X >= 0 && LocalPosition.Y >= 0 && LocalPosition.X <= LocalSize.X && LocalPosition.Y <= LocalSize.Y)
-		{
-			bIsDragging = true;
-			LastMousePosition = LocalPosition;
-
-			const FVector2D UV = LocalPosition / LocalSize;
-			const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
-			OnMinimapPointerDown.Broadcast(WorldLocation);
-			
-			// 返回Handled，表示我们已处理此事件，并捕获鼠标以备后续的OnMouseButtonUp和OnMouseMove
-			return FReply::Handled().CaptureMouse(TakeWidget());
-		}
+		bIsDragging = true;
+		LastMousePosition = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
+		
+		// 返回Handled，表示我们已处理此事件，并捕获鼠标以备后续的OnMouseButtonUp和OnMouseMove
+		return FReply::Handled().CaptureMouse(TakeWidget());
 	}
 	return FReply::Unhandled();
 }
@@ -155,13 +209,6 @@ FReply UMinimapWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const 
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && bIsDragging)
 	{
 		bIsDragging = false;
-
-		const FVector2D LocalPosition = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
-		const FVector2D LocalSize = InGeometry.GetLocalSize();
-		const FVector2D UV = FVector2D(FMath::Clamp(LocalPosition.X / LocalSize.X, 0.0f, 1.0f), FMath::Clamp(LocalPosition.Y / LocalSize.Y, 0.0f, 1.0f));
-		
-		const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
-		OnMinimapPointerUp.Broadcast(WorldLocation);
 
 		// 释放鼠标捕获并返回Handled
 		return FReply::Handled().ReleaseMouseCapture();
@@ -179,17 +226,51 @@ FReply UMinimapWidget::NativeOnMouseMove(const FGeometry& InGeometry, const FPoi
 
 		if (OnMinimapDragged.IsBound() && FogOfWarActor)
 		{
-			// 将UV空间的增量转换为世界空间的增量
 			const FVector2D LocalSize = InGeometry.GetLocalSize();
-			const FVector2D WorldDelta = FVector2D(MouseDelta.X / LocalSize.X * FogOfWarActor->GridSize.X, MouseDelta.Y / LocalSize.Y * FogOfWarActor->GridSize.Y * -1.0f);
-			OnMinimapDragged.Broadcast(FVector(WorldDelta, 0.0f));
+			const FVector2D WorldDelta2D = FVector2D(MouseDelta.X / LocalSize.X * FogOfWarActor->GridSize.X, MouseDelta.Y / LocalSize.Y * FogOfWarActor->GridSize.Y * -1.0f);
+			OnMinimapDragged.Broadcast(FVector(WorldDelta2D, 0.0f));
 		}
-
 		return FReply::Handled();
 	}
 	return FReply::Unhandled();
 }
 
+void UMinimapWidget::OnMinimapButtonPressed()
+{
+	if (MinimapButton && GetOwningPlayer())
+	{
+		bIsMinimapButtonHeld = true; // Set flag
+		FVector2D MousePosition;
+		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
+		JumpToMousePointOnMinimap(MousePosition, this->GetCachedGeometry()); // Use UMinimapWidget's geometry
+	}
+}
+
+void UMinimapWidget::OnMinimapButtonReleased()
+{
+	if (MinimapButton && GetOwningPlayer())
+	{
+		bIsMinimapButtonHeld = false; // Clear flag
+		FVector2D MousePosition;
+		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
+		JumpToMousePointOnMinimap(MousePosition, this->GetCachedGeometry()); // Use UMinimapWidget's geometry
+	}
+}
+
+void UMinimapWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+
+	if (MinimapButton)
+	{
+		MinimapButton->OnPressed.AddDynamic(this, &UMinimapWidget::OnMinimapButtonPressed);
+		MinimapButton->OnReleased.AddDynamic(this, &UMinimapWidget::OnMinimapButtonReleased);
+
+	}
+	// 注意：我们不再在这里设置笔刷
+}
 void UMinimapWidget::UpdateMinimapTexture()
 {
 	UE_LOG(LogMinimapWidget, Log, TEXT("UpdateMinimapTexture: Tick received, attempting update."));

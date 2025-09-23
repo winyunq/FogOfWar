@@ -22,6 +22,8 @@ void UMassVisionTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildConte
 		FMassMinimapRepresentationFragment& RepresentationFragment = BuildContext.AddFragment_GetRef<FMassMinimapRepresentationFragment>();
 		RepresentationFragment.IconColor = MinimapIconColor;
 		RepresentationFragment.IconSize = MinimapIconSize;
+		
+		BuildContext.AddFragment<FMassPreviousMinimapCellFragment>(); // Add fragment for the observer
 
 		if (bAlwaysVisibleOnMinimap)
 		{
