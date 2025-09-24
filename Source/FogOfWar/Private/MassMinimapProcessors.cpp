@@ -133,13 +133,12 @@ void UMinimapRemoveProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 
 
 //----------------------------------------------------------------------//
-//  UMinimapUpdateProcessor
+//  UMinimapUpdateProcessor (Refactored with Logging)
 //----------------------------------------------------------------------//
 UMinimapUpdateProcessor::UMinimapUpdateProcessor()
 	: EntityQuery(*this)
 {
-	ObservedType = FTransformFragment::StaticStruct();
-	Operation = EMassObservedOperation::MAX;
+	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 }
 
@@ -151,9 +150,11 @@ void UMinimapUpdateProcessor::Initialize(UObject& Owner)
 
 void UMinimapUpdateProcessor::ConfigureQueries()
 {
+	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadWrite);
+	EntityQuery.AddTagRequirement<FMinimapCellChangedTag>(EMassFragmentPresence::All);
 	EntityQuery.RegisterWithProcessor(*this);
 }
 
@@ -161,6 +162,7 @@ void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 {
 	if (!MinimapDataSubsystem)
 	{
+		UE_LOG(LogTemp, Error, TEXT("UMinimapUpdateProcessor: MinimapDataSubsystem is null."));
 		return;
 	}
 
@@ -175,28 +177,39 @@ void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 
 		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
 		{
+			const FMassEntityHandle Entity = Context.GetEntity(i);
 			const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
-			const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
-			const FMassVisionFragment& VisionFragment = VisionList[i];
 			FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCellList[i];
-
+			
+			const FIntPoint PrevCellCoords = PrevCellFragment.PrevCellCoords;
 			const FIntPoint CurrentMinimapTileIJ = MinimapDataSubsystem->ConvertWorldLocationToMinimapTileIJ(FVector2D(WorldLocation));
 
-			if (CurrentMinimapTileIJ != PrevCellFragment.PrevCellCoords)
+			UE_LOG(LogTemp, Log, TEXT("Entity [%d]: WorldLoc=(%.1f, %.1f), PrevCell=(%d, %d), CurrentCell=(%d, %d)"),
+				Entity.Index, WorldLocation.X, WorldLocation.Y, PrevCellCoords.X, PrevCellCoords.Y, CurrentMinimapTileIJ.X, CurrentMinimapTileIJ.Y);
+
+			if (CurrentMinimapTileIJ != PrevCellCoords)
 			{
+				UE_LOG(LogTemp, Warning, TEXT("Entity [%d]: CELL CHANGED!"), Entity.Index);
+
 				// Decrement old tile
-				const FIntPoint& PrevCellCoords = PrevCellFragment.PrevCellCoords;
-				if (PrevCellCoords.X >= 0 && PrevCellCoords.Y >= 0 && PrevCellCoords.X < MinimapResolution.X && PrevCellCoords.Y < MinimapResolution.Y)
+				if (PrevCellCoords.X != INT_MIN) // Don't decrement on the first run
 				{
-					const int32 OldIndex = PrevCellCoords.X * MinimapResolution.Y + PrevCellCoords.Y;
-					FMinimapTile& OldTile = MinimapDataSubsystem->MinimapTiles[OldIndex];
-					OldTile.UnitCount--;
-					if (OldTile.UnitCount <= 0)
+					if (PrevCellCoords.X >= 0 && PrevCellCoords.Y >= 0 && PrevCellCoords.X < MinimapResolution.X && PrevCellCoords.Y < MinimapResolution.Y)
 					{
-						OldTile.Color = FLinearColor::Black;
-						OldTile.UnitCount = 0;
-						OldTile.MaxSightRadius = 0.0f;
-						OldTile.MaxIconSize = 0.0f;
+						const int32 OldIndex = PrevCellCoords.X * MinimapResolution.Y + PrevCellCoords.Y;
+						FMinimapTile& OldTile = MinimapDataSubsystem->MinimapTiles[OldIndex];
+						const int32 OldUnitCount = OldTile.UnitCount;
+						OldTile.UnitCount--;
+						UE_LOG(LogTemp, Log, TEXT("  > Decremented Old Tile (%d, %d), Index: %d, Count: %d -> %d"), PrevCellCoords.X, PrevCellCoords.Y, OldIndex, OldUnitCount, OldTile.UnitCount);
+
+						if (OldTile.UnitCount <= 0)
+						{
+							OldTile.Color = FLinearColor::Black;
+							OldTile.UnitCount = 0;
+							OldTile.MaxSightRadius = 0.0f;
+							OldTile.MaxIconSize = 0.0f;
+							UE_LOG(LogTemp, Log, TEXT("  > Old Tile is now empty."));
+						}
 					}
 				}
 
@@ -205,15 +218,31 @@ void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 				{
 					const int32 NewIndex = CurrentMinimapTileIJ.X * MinimapResolution.Y + CurrentMinimapTileIJ.Y;
 					FMinimapTile& NewTile = MinimapDataSubsystem->MinimapTiles[NewIndex];
+					const int32 OldUnitCount = NewTile.UnitCount;
 					NewTile.UnitCount++;
+					const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
+					const FMassVisionFragment& VisionFragment = VisionList[i];
 					NewTile.Color = RepFragment.IconColor;
 					NewTile.MaxSightRadius = FMath::Max(NewTile.MaxSightRadius, VisionFragment.SightRadius);
 					NewTile.MaxIconSize = FMath::Max(NewTile.MaxIconSize, RepFragment.IconSize);
+					UE_LOG(LogTemp, Log, TEXT("  > Incremented New Tile (%d, %d), Index: %d, Count: %d -> %d"), CurrentMinimapTileIJ.X, CurrentMinimapTileIJ.Y, NewIndex, OldUnitCount, NewTile.UnitCount);
 				}
 
 				// Update the previous location fragment
+				UE_LOG(LogTemp, Log, TEXT("  > Updating PrevCell from (%d, %d) to (%d, %d)"), PrevCellCoords.X, PrevCellCoords.Y, CurrentMinimapTileIJ.X, CurrentMinimapTileIJ.Y);
 				PrevCellFragment.PrevCellCoords = CurrentMinimapTileIJ;
 			}
+			else
+			{
+				UE_LOG(LogTemp, Verbose, TEXT("Entity [%d]: Cell NOT changed. Skipping update."), Entity.Index);
+			}
+		}
+
+		// Consume the tag now that the update is processed.
+		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
+		for (const FMassEntityHandle& Entity : Entities)
+		{
+			Context.Defer().RemoveTag<FMinimapCellChangedTag>(Entity);
 		}
 	});
 }

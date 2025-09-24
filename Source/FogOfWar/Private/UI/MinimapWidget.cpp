@@ -32,22 +32,6 @@ UTexture2D* CreateDynamicDataTexture(UObject* Outer, int32 Width, int32 Height, 
 	return Texture;
 }
 
-// 辅助函数：更新数据纹理的内容
-void UpdateDataTexture(UTexture2D* Texture, const TArray<FLinearColor>& Data)
-{
-	if (!Texture || !Texture->GetPlatformData() || !Texture->GetPlatformData()->Mips.IsValidIndex(0))
-	{
-		return;
-	}
-
-	FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
-	void* TextureData = Mip.BulkData.Lock(LOCK_READ_WRITE);
-	const int32 DataSize = FMath::Min(Data.Num(), Texture->GetSizeX() * Texture->GetSizeY()) * sizeof(FLinearColor);
-	FMemory::Memcpy(TextureData, Data.GetData(), DataSize);
-	Mip.BulkData.Unlock();
-	Texture->UpdateResource();
-}
-
 bool UMinimapWidget::InitializeFromWorldFogOfWar()
 {
 	bIsSuccessfullyInitialized = false;
@@ -146,6 +130,30 @@ FVector UMinimapWidget::ConvertMinimapUVToWorldLocation(const FVector2D& UVPosit
 	return FVector(WorldLocation2D, 0.0f);
 }
 
+void UMinimapWidget::JumpToLocationUnderMouse()
+{
+	if (!MinimapImage || !GetOwningPlayer() || !RTSCameraComponent)
+	{
+		return;
+	}
+
+	FVector2D MousePositionScreen;
+	GetOwningPlayer()->GetMousePosition(MousePositionScreen.X, MousePositionScreen.Y);
+
+	// Use the MinimapImage's geometry as the sole reference for coordinate conversion.
+	const FGeometry& ImageGeometry = MinimapImage->GetCachedGeometry();
+	const FVector2D LocalMousePosition = ImageGeometry.AbsoluteToLocal(MousePositionScreen);
+	const FVector2D ImageLocalSize = ImageGeometry.GetLocalSize();
+
+	// Only perform the jump if the cursor is actually over the minimap image.
+	if (LocalMousePosition.X >= 0 && LocalMousePosition.Y >= 0 && LocalMousePosition.X <= ImageLocalSize.X && LocalMousePosition.Y <= ImageLocalSize.Y)
+	{
+		const FVector2D UV = LocalMousePosition / ImageLocalSize;
+		const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
+		RTSCameraComponent->JumpTo(WorldLocation);
+	}
+}
+
 void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
@@ -155,11 +163,9 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 		return;
 	}
 
-	if (bIsMinimapButtonHeld && GetOwningPlayer())
+	if (bIsMinimapButtonHeld)
 	{
-		FVector2D MousePosition;
-		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
-		JumpToMousePointOnMinimap(MousePosition, MyGeometry);
+		JumpToLocationUnderMouse();
 	}
 
 	TimeSinceLastUpdate += InDeltaTime;
@@ -170,19 +176,6 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 	TimeSinceLastUpdate = 0.0f;
 	UpdateMinimapTexture();
-}
-
-void UMinimapWidget::JumpToMousePointOnMinimap(const FVector2D& ScreenPosition, const FGeometry& WidgetGeometry)
-{
-	const FVector2D LocalPosition = WidgetGeometry.AbsoluteToLocal(ScreenPosition);
-	const FVector2D LocalSize = WidgetGeometry.GetLocalSize();
-	const FVector2D UV = LocalPosition / LocalSize;
-	const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
-		
-	if (RTSCameraComponent)
-	{
-		RTSCameraComponent->JumpTo(WorldLocation);
-	}
 }
 
 FReply UMinimapWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
@@ -230,9 +223,7 @@ void UMinimapWidget::OnMinimapButtonPressed()
 	if (MinimapButton && GetOwningPlayer())
 	{
 		bIsMinimapButtonHeld = true;
-		FVector2D MousePosition;
-		GetOwningPlayer()->GetMousePosition(MousePosition.X, MousePosition.Y);
-		JumpToMousePointOnMinimap(MousePosition, this->MinimapButton->GetCachedGeometry());
+		JumpToLocationUnderMouse();
 	}
 }
 
@@ -264,74 +255,168 @@ void UMinimapWidget::UpdateMinimapTexture()
 		return;
 	}
 
-	// --- 1. Data Collection from new Tile-based Subsystem ---
-	TArray<FVector4> TempIconLocations;
-	TArray<FLinearColor> TempIconColors;
-	TArray<FVector4> TempVisionSources; 
+	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+	if (!EntitySubsystem)
+	{
+		return;
+	}
 
+	// Decide which drawing path to take based on the number of units.
+	FMassEntityQuery CountQuery;
+	CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+	const int32 TotalUnitCount = CountQuery.GetNumMatchingEntities(EntitySubsystem->GetMutableEntityManager());
+
+	// if (TotalUnitCount <= DirectQueryThreshold)
+	// {
+	// 	DrawInLessSize();
+	// }
+	// else
+	{
+		DrawInMassSize();
+	}
+}
+
+void UMinimapWidget::DrawInLessSize()
+{
+	// UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+	// if (!EntitySubsystem || !IconDataTexture || !IconColorTexture || !VisionDataTexture)
+	// {
+	// 	return;
+	// }
+
+	// FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+	// // --- 1. Lock Textures for Direct Writing ---
+	// FTexture2DMipMap& IconDataMip = IconDataTexture->GetPlatformData()->Mips[0];
+	// FLinearColor* IconDataPtr = static_cast<FLinearColor*>(IconDataMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	// FTexture2DMipMap& IconColorMip = IconColorTexture->GetPlatformData()->Mips[0];
+	// FLinearColor* IconColorPtr = static_cast<FLinearColor*>(IconColorMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	// FTexture2DMipMap& VisionDataMip = VisionDataTexture->GetPlatformData()->Mips[0];
+	// FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	// // --- 2. Define and Execute Query for All Minimap Entities ---
+	// FMassEntityQuery EntityQuery;
+	// EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	// EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+	// EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
+
+	// TArray<FMassArchetypeHandle> Archetypes;
+	// EntityQuery.GetArchetypes(EntityManager, Archetypes);
+
+	// int32 UnitCount = 0;
+	// int32 VisionSourceCount = 0;
+
+	// for (const FMassArchetypeHandle& ArchetypeHandle : Archetypes)
+	// {
+	// 	FMassArchetypeEntityCollection EntityCollection = EntityManager.GetArchetypeEntityCollection(ArchetypeHandle);
+
+	// 	const FMassFragmentView<FTransformFragment> LocationList = EntityManager.GetFragmentView<FTransformFragment>(ArchetypeHandle);
+	// 	const FMassFragmentView<FMassMinimapRepresentationFragment> RepList = EntityManager.GetFragmentView<FMassMinimapRepresentationFragment>(ArchetypeHandle);
+	// 	const FMassFragmentView<FMassVisionFragment> VisionList = EntityManager.GetFragmentView<FMassVisionFragment>(ArchetypeHandle);
+
+	// 	for (int32 i = 0; i < EntityCollection.Num(); ++i)
+	// 	{
+	// 		if (UnitCount >= MaxUnits) break;
+
+	// 		const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
+	// 		const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
+	// 		const FMassVisionFragment& VisionFragment = VisionList[i];
+
+	// 		// Write data directly to texture pointers
+	// 		IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, RepFragment.IconSize, 1.0f);
+	// 		IconColorPtr[UnitCount] = RepFragment.IconColor;
+	// 		UnitCount++;
+
+	// 		if (VisionFragment.SightRadius > 0.0f)
+	// 		{
+	// 			if (VisionSourceCount >= MaxUnits) break;
+	// 			VisionDataPtr[VisionSourceCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, 0.0f, VisionFragment.SightRadius);
+	// 			VisionSourceCount++;
+	// 		}
+	// 	}
+	// 	if (UnitCount >= MaxUnits) break;
+	// }
+
+	// // --- 3. Unlock Textures & Finalize ---
+	// IconDataMip.BulkData.Unlock();
+	// IconColorMip.BulkData.Unlock();
+	// VisionDataMip.BulkData.Unlock();
+	// IconDataTexture->UpdateResource();
+	// IconColorTexture->UpdateResource();
+	// VisionDataTexture->UpdateResource();
+
+	// UE_LOG(LogMinimapWidget, Log, TEXT("DrawInLessSize: %d vision sources, %d icons."), VisionSourceCount, UnitCount);
+
+	// MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
+	// MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
+
+	// const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
+	// UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
+	// UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
+}
+
+void UMinimapWidget::DrawInMassSize()
+{
+	if (!MinimapDataSubsystem || !IconDataTexture || !IconColorTexture || !VisionDataTexture)
+	{
+		return;
+	}
+
+	// --- 1. Lock Textures for Direct Writing ---
+	FTexture2DMipMap& IconDataMip = IconDataTexture->GetPlatformData()->Mips[0];
+	FLinearColor* IconDataPtr = static_cast<FLinearColor*>(IconDataMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	FTexture2DMipMap& IconColorMip = IconColorTexture->GetPlatformData()->Mips[0];
+	FLinearColor* IconColorPtr = static_cast<FLinearColor*>(IconColorMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	FTexture2DMipMap& VisionDataMip = VisionDataTexture->GetPlatformData()->Mips[0];
+	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	// --- 2. Read from Tile Cache and Write to Pointers ---
 	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
 	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
+	int32 UnitCount = 0;
+	int32 VisionSourceCount = 0;
 
 	for (int32 i = 0; i < Tiles.Num(); ++i)
 	{
+		if (UnitCount >= MaxUnits) break;
+
 		const FMinimapTile& Tile = Tiles[i];
 		if (Tile.UnitCount > 0)
 		{
-			// This tile has units, convert its 1D index back to 2D grid coordinates
 			const FIntVector2 TileIJ(i / GridResolution.Y, i % GridResolution.Y);
-			
-			// Convert grid coordinates to world location for the shader
 			const FVector2D WorldLocation = MinimapDataSubsystem->ConvertMinimapTileIJToWorldLocation(FIntPoint(TileIJ.X, TileIJ.Y));
 
-			// Add icon data
-			TempIconLocations.Add(FVector4(WorldLocation.X, WorldLocation.Y, Tile.MaxIconSize, 1.0f));
-			TempIconColors.Add(Tile.Color);
+			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, Tile.MaxIconSize, 1.0f);
+			IconColorPtr[UnitCount] = Tile.Color;
+			UnitCount++;
 
-			// If the tile has a sight radius, add it to the vision sources list for the GPU.
 			if (Tile.MaxSightRadius > 0.0f)
 			{
-				// The shader expects FVector4(X, Y, 0, Radius)
-				TempVisionSources.Add(FVector4(WorldLocation.X, WorldLocation.Y, 0.0f, Tile.MaxSightRadius));
+				if (VisionSourceCount >= MaxUnits) break;
+				VisionDataPtr[VisionSourceCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, 0.0f, Tile.MaxSightRadius);
+				VisionSourceCount++;
 			}
 		}
 	}
 
-	UE_LOG(LogMinimapWidget, Log, TEXT("Data fetched from Subsystem: %d vision sources, %d icons."), TempVisionSources.Num(), TempIconLocations.Num());
+	// --- 3. Unlock Textures & Finalize ---
+	IconDataMip.BulkData.Unlock();
+	IconColorMip.BulkData.Unlock();
+	VisionDataMip.BulkData.Unlock();
+	IconDataTexture->UpdateResource();
+	IconColorTexture->UpdateResource();
+	VisionDataTexture->UpdateResource();
 
-	// --- 3. Update Data Textures --- 
-	const int32 NumberOfUnits = TempIconLocations.Num();
-	TArray<FLinearColor> IconLocationPixelData;
-	// SAFE CONVERSION: Manually and explicitly convert FVector4 to FLinearColor.
-	IconLocationPixelData.Reserve(NumberOfUnits);
-	for (const FVector4& Location : TempIconLocations)
-	{
-		IconLocationPixelData.Add(FLinearColor(Location.X, Location.Y, Location.Z, Location.W));
-	}
-	
-	IconLocationPixelData.SetNumZeroed(IconDataTexture->GetSizeX()); // Pad array to match texture size
-	UpdateDataTexture(IconDataTexture, IconLocationPixelData);
+	UE_LOG(LogMinimapWidget, Log, TEXT("DrawInMassSize: %d vision sources, %d icons."), VisionSourceCount, UnitCount);
 
-	TArray<FLinearColor> IconColorPixelData = TempIconColors;
-	IconColorPixelData.SetNumZeroed(IconColorTexture->GetSizeX());
-	UpdateDataTexture(IconColorTexture, IconColorPixelData);
-
-	const int32 NumVision = TempVisionSources.Num();
-	TArray<FLinearColor> VisionPixelData;
-	// SAFE CONVERSION for Vision Sources as well
-	VisionPixelData.Reserve(NumVision);
-	for (const FVector4& VisionSource : TempVisionSources)
-	{
-		VisionPixelData.Add(FLinearColor(VisionSource.X, VisionSource.Y, VisionSource.Z, VisionSource.W));
-	}
-	VisionPixelData.SetNumZeroed(VisionDataTexture->GetSizeX()); // Pad array to match texture size
-	UpdateDataTexture(VisionDataTexture, VisionPixelData);
-
-	// --- 4. Update Material Parameters ---
-	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), NumberOfUnits);
-	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), NumVision);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
 
 	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
 	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
-
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
 }

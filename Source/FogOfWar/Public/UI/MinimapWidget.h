@@ -52,11 +52,15 @@ protected:
 	// 核心更新函数
 	void UpdateMinimapTexture();
 
+	// 根据单位数量选择不同的绘制路径
+	void DrawInMassSize();  // 大于阈值时，使用缓存绘制
+	void DrawInLessSize();  // 小于等于阈值时，直接查询绘制
+
 	UFUNCTION() void OnMinimapButtonPressed(); // Added for UButton
 	UFUNCTION() void OnMinimapButtonReleased(); // Added for UButton
 
-	// 将相机移动到小地图上的鼠标点击位置
-	void JumpToMousePointOnMinimap(const FVector2D& ScreenPosition, const FGeometry& WidgetGeometry);
+	// 将相机移动到小地图上的鼠标点击/悬停位置
+	void JumpToLocationUnderMouse();
 
 public:
 	// --- 事件回调 (Event Callbacks) ---
@@ -75,6 +79,9 @@ protected:
 	/** 小地图纹理的分辨率 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance")
 	FIntPoint TextureResolution = FIntPoint(256, 256);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (ClampMin = "0"))
+	int32 DirectQueryThreshold = 1024;
 
 	/** 小地图更新的频率（秒）。0表示每帧更新。*/
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (ClampMin = "0.0"))
