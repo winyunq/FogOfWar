@@ -50,75 +50,75 @@ void UpdateDataTexture(UTexture2D* Texture, const TArray<FLinearColor>& Data)
 
 bool UMinimapWidget::InitializeFromWorldFogOfWar()
 {
+	bIsSuccessfullyInitialized = false;
+
 	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	if (FogOfWarActor)
+	if (!FogOfWarActor)
 	{
-		// 创建渲染目标和数据纹理
-		if (!MinimapRenderTarget)
-		{
-			MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::RTF_RGBA8);
-		}
-		if (!VisionDataTexture)
-		{
-			VisionDataTexture = CreateDynamicDataTexture(this, 128, 1, TEXT("VisionDataTexture")); // 最多支持128个视野源
-		}
-		if (!IconDataTexture)
-		{
-			IconDataTexture = CreateDynamicDataTexture(this, 256, 1, TEXT("IconDataTexture")); // 最多支持256个图标
-		}
-		if (!IconColorTexture)
-		{
-			IconColorTexture = CreateDynamicDataTexture(this, 256, 1, TEXT("IconColorTexture")); // 与IconDataTexture对应
-		}
-		
-		if (MinimapMaterial)
-		{
-			MinimapMaterialInstance = UMaterialInstanceDynamic::Create(MinimapMaterial, this);
-			// 将数据纹理设置给材质
-			MinimapMaterialInstance->SetTextureParameterValue(TEXT("VisionDataTexture"), VisionDataTexture);
-			MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconDataTexture"), IconDataTexture);
-			MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconColorTexture"), IconColorTexture);
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: AFogOfWar actor not found in the level."));
+		return false;
+	}
 
-			// 从AFogOfWar同步坐标系信息到材质
-			MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(FogOfWarActor->GridBottomLeftWorldLocation.X, FogOfWarActor->GridBottomLeftWorldLocation.Y, 0));
-			MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(FogOfWarActor->GridSize.X, FogOfWarActor->GridSize.Y, 0));
-		
-			UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar."));
-		}
-		else
-		{
-			UE_LOG(LogMinimapWidget, Warning, TEXT("MinimapMaterial is not set."));
-		}
+	if (!MinimapRenderTarget)
+	{
+		MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::RTF_RGBA8);
+	}
+	if (!VisionDataTexture)
+	{
+		VisionDataTexture = CreateDynamicDataTexture(this, 128, 1, TEXT("VisionDataTexture"));
+	}
+	if (!IconDataTexture)
+	{
+		IconDataTexture = CreateDynamicDataTexture(this, 256, 1, TEXT("IconDataTexture"));
+	}
+	if (!IconColorTexture)
+	{
+		IconColorTexture = CreateDynamicDataTexture(this, 256, 1, TEXT("IconColorTexture"));
+	}
 
-		APlayerController* PlayerController = GetOwningPlayer();
-		if (PlayerController)
+	if (!MinimapMaterial)
+	{
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: MinimapMaterial is not set."));
+		return false;
+	}
+
+	MinimapMaterialInstance = UMaterialInstanceDynamic::Create(MinimapMaterial, this);
+
+	if (!MinimapRenderTarget || !VisionDataTexture || !IconDataTexture || !IconColorTexture || !MinimapMaterialInstance)
+	{
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: A required resource (Texture or MaterialInstance) could not be created."));
+		return false;
+	}
+	
+	MinimapMaterialInstance->SetTextureParameterValue(TEXT("VisionDataTexture"), VisionDataTexture);
+	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconDataTexture"), IconDataTexture);
+	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconColorTexture"), IconColorTexture);
+
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(FogOfWarActor->GridBottomLeftWorldLocation.X, FogOfWarActor->GridBottomLeftWorldLocation.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(FogOfWarActor->GridSize.X, FogOfWarActor->GridSize.Y, 0));
+
+	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar."));
+
+	APlayerController* PlayerController = GetOwningPlayer();
+	if (PlayerController)
+	{
+		APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager;
+		if (CameraManager)
 		{
-			APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager;
-			if (CameraManager)
+			AActor* ViewTarget = CameraManager->GetViewTarget();
+			if (ViewTarget)
 			{
-				AActor* ViewTarget = CameraManager->GetViewTarget();
-				if (ViewTarget)
+				APawn* ViewTargetPawn = Cast<APawn>(ViewTarget);
+				if (ViewTargetPawn)
 				{
-					APawn* ViewTargetPawn = Cast<APawn>(ViewTarget);
-					if (ViewTargetPawn)
-					{
-						RTSCameraComponent = ViewTargetPawn->FindComponentByClass<URTSCamera>();
-					}
+					RTSCameraComponent = ViewTargetPawn->FindComponentByClass<URTSCamera>();
 				}
 			}
 		}
-		
-		// --- 6. Update Image Brush ---
-		if (MinimapImage)
-		{
-			FSlateBrush Brush = MinimapImage->GetBrush();
-			Brush.SetResourceObject(MinimapRenderTarget);
-			MinimapImage->SetBrush(Brush);
-		}
-		return true;
 	}
-	UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: AFogOfWar actor not found in the level."));
-	return false;
+	
+	bIsSuccessfullyInitialized = true;
+	return true;
 }
 
 FVector UMinimapWidget::ConvertMinimapUVToWorldLocation(const FVector2D& UVPosition) const
@@ -138,6 +138,11 @@ FVector UMinimapWidget::ConvertMinimapUVToWorldLocation(const FVector2D& UVPosit
 void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	if (!bIsSuccessfullyInitialized)
+	{
+		return;
+	}
 
 	if (bIsMinimapButtonHeld && GetOwningPlayer())
 	{
@@ -243,10 +248,8 @@ void UMinimapWidget::NativeConstruct()
 
 void UMinimapWidget::UpdateMinimapTexture()
 {
-	UWorld* World = GetWorld();
-	if (!World || !MinimapMaterialInstance || !MinimapRenderTarget || !VisionDataTexture || !IconDataTexture || !IconColorTexture || !MinimapDataSubsystem)
+	if (!ensure(bIsSuccessfullyInitialized && MinimapDataSubsystem))
 	{
-		UE_LOG(LogMinimapWidget, Warning, TEXT("UpdateMinimapTexture skipped: A required component is null."));
 		return;
 	}
 
@@ -264,12 +267,12 @@ void UMinimapWidget::UpdateMinimapTexture()
 	UE_LOG(LogMinimapWidget, Log, TEXT("Data fetched from Subsystem: %d vision sources, %d icons."), TempVisionSources.Num(), TempIconLocations.Num());
 
 	// --- 3. Update Data Textures ---
-	const int32 NumIcons = TempIconLocations.Num();
+	const int32 NumberOfUnits = TempIconLocations.Num();
 	TArray<FLinearColor> IconLocationPixelData;
-	if (NumIcons > 0)
+	if (NumberOfUnits > 0)
 	{
-		IconLocationPixelData.SetNumUninitialized(NumIcons);
-		FMemory::Memcpy(IconLocationPixelData.GetData(), TempIconLocations.GetData(), NumIcons * sizeof(FVector4));
+		IconLocationPixelData.SetNumUninitialized(NumberOfUnits);
+		FMemory::Memcpy(IconLocationPixelData.GetData(), TempIconLocations.GetData(), NumberOfUnits * sizeof(FVector4));
 	}
 	IconLocationPixelData.SetNumZeroed(IconDataTexture->GetSizeX()); // Pad array to match texture size
 	UpdateDataTexture(IconDataTexture, IconLocationPixelData);
@@ -289,12 +292,11 @@ void UMinimapWidget::UpdateMinimapTexture()
 	UpdateDataTexture(VisionDataTexture, VisionPixelData);
 
 	// --- 4. Update Material Parameters ---
-	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumIcons"), NumIcons);
-	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumVisionSources"), NumVision);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), NumberOfUnits);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), NumVision);
 
 	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
 	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
 
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
-
 }

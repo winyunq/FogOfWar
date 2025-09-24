@@ -129,5 +129,8 @@ protected:
 	FVector2D LastMousePosition = FVector2D::ZeroVector;
 
 	// 按钮按住状态
-	bool bIsMinimapButtonHeld = false; // <-- Add this line
+	bool bIsMinimapButtonHeld = false; 
+
+	// -- Internal Debug --
+	bool bIsSuccessfullyInitialized = false;
 };
