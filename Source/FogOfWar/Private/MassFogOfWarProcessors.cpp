@@ -68,10 +68,11 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 		VisionUnitData.LocalAreaTilesCachedStates.Init(ETileState::Unknown, VisionUnitData.LocalAreaTilesCachedStates.Num());
 		const FIntVector2 OriginGlobalIJ = FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation);
 		
-		if (!ensureMsgf(FogOfWar->IsGlobalIJValid(OriginGlobalIJ), TEXT("Vision actor is outside the grid")))
+		        if (!FogOfWar->IsGlobalIJValid(OriginGlobalIJ))
 		{
+			UE_LOG(LogFogOfWar, Verbose, TEXT("Vision actor is outside the grid. Skipping."));
 			PreviousVisionFragment.PreviousVisionData = MoveTemp(VisionUnitData);
-			return;
+			continue; // Use continue to skip this entity and proceed with the next in the chunk
 		}
 
 		if (VisionUnitData.LocalAreaTilesResolution == 0)

@@ -96,7 +96,7 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(FogOfWarActor->GridBottomLeftWorldLocation.X, FogOfWarActor->GridBottomLeftWorldLocation.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(FogOfWarActor->GridSize.X, FogOfWarActor->GridSize.Y, 0));
-
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(FogOfWarActor->GridSize.X/TextureResolution.X, FogOfWarActor->GridSize.Y/TextureResolution.Y, 0));
 	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar."));
 
 	APlayerController* PlayerController = GetOwningPlayer();
@@ -248,32 +248,55 @@ void UMinimapWidget::NativeConstruct()
 
 void UMinimapWidget::UpdateMinimapTexture()
 {
-	if (!ensure(bIsSuccessfullyInitialized && MinimapDataSubsystem))
+	if (!ensure(bIsSuccessfullyInitialized && MinimapDataSubsystem && FogOfWarActor))
 	{
 		return;
 	}
 
-	// --- 1. Icon Data Collection ---
+	// --- 1. Data Collection from new Tile-based Subsystem ---
 	TArray<FVector4> TempIconLocations;
-	MinimapDataSubsystem->IconLocations.GenerateValueArray(TempIconLocations);
-
 	TArray<FLinearColor> TempIconColors;
-	MinimapDataSubsystem->IconColors.GenerateValueArray(TempIconColors);
+	TArray<FVector4> TempVisionSources; 
 
-	// --- 2. Vision Data Collection ---
-	TArray<FVector4> TempVisionSources;
-	MinimapDataSubsystem->VisionSources.GenerateValueArray(TempVisionSources);
+	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
+	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
+
+	for (int32 i = 0; i < Tiles.Num(); ++i)
+	{
+		const FMinimapTile& Tile = Tiles[i];
+		if (Tile.UnitCount > 0)
+		{
+			// This tile has units, convert its 1D index back to 2D grid coordinates
+			const FIntVector2 TileIJ(i / GridResolution.Y, i % GridResolution.Y);
+			
+			// Convert grid coordinates to world location for the shader
+			const FVector2D WorldLocation = FogOfWarActor->ConvertTileIJToTileCenterWorldLocation(TileIJ);
+
+			// Add icon data
+			TempIconLocations.Add(FVector4(WorldLocation.X, WorldLocation.Y, 25.0f, 1.0f));
+			TempIconColors.Add(Tile.Color);
+
+			// If the tile has a sight radius, add it to the vision sources list for the GPU.
+			if (Tile.MaxSightRadius > 0.0f)
+			{
+				// The shader expects FVector4(X, Y, 0, Radius)
+				TempVisionSources.Add(FVector4(WorldLocation.X, WorldLocation.Y, 0.0f, Tile.MaxSightRadius));
+			}
+		}
+	}
 
 	UE_LOG(LogMinimapWidget, Log, TEXT("Data fetched from Subsystem: %d vision sources, %d icons."), TempVisionSources.Num(), TempIconLocations.Num());
 
-	// --- 3. Update Data Textures ---
+	// --- 3. Update Data Textures --- 
 	const int32 NumberOfUnits = TempIconLocations.Num();
 	TArray<FLinearColor> IconLocationPixelData;
-	if (NumberOfUnits > 0)
+	// SAFE CONVERSION: Manually and explicitly convert FVector4 to FLinearColor.
+	IconLocationPixelData.Reserve(NumberOfUnits);
+	for (const FVector4& Location : TempIconLocations)
 	{
-		IconLocationPixelData.SetNumUninitialized(NumberOfUnits);
-		FMemory::Memcpy(IconLocationPixelData.GetData(), TempIconLocations.GetData(), NumberOfUnits * sizeof(FVector4));
+		IconLocationPixelData.Add(FLinearColor(Location.X, Location.Y, Location.Z, Location.W));
 	}
+	
 	IconLocationPixelData.SetNumZeroed(IconDataTexture->GetSizeX()); // Pad array to match texture size
 	UpdateDataTexture(IconDataTexture, IconLocationPixelData);
 
@@ -283,10 +306,11 @@ void UMinimapWidget::UpdateMinimapTexture()
 
 	const int32 NumVision = TempVisionSources.Num();
 	TArray<FLinearColor> VisionPixelData;
-	if (NumVision > 0)
+	// SAFE CONVERSION for Vision Sources as well
+	VisionPixelData.Reserve(NumVision);
+	for (const FVector4& VisionSource : TempVisionSources)
 	{
-		VisionPixelData.SetNumUninitialized(NumVision);
-		FMemory::Memcpy(VisionPixelData.GetData(), TempVisionSources.GetData(), NumVision * sizeof(FVector4));
+		VisionPixelData.Add(FLinearColor(VisionSource.X, VisionSource.Y, VisionSource.Z, VisionSource.W));
 	}
 	VisionPixelData.SetNumZeroed(VisionDataTexture->GetSizeX()); // Pad array to match texture size
 	UpdateDataTexture(VisionDataTexture, VisionPixelData);
@@ -295,8 +319,8 @@ void UMinimapWidget::UpdateMinimapTexture()
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), NumberOfUnits);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), NumVision);
 
-	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
-	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
+	// const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
+	// UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
 
-	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
+	//UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
 }

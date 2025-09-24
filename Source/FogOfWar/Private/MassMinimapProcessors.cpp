@@ -2,49 +2,131 @@
 
 #include "MassMinimapProcessors.h"
 #include "MassFogOfWarFragments.h"
-#include "MassCommonFragments.h"
+#include "Subsystems/MinimapDataSubsystem.h"
 #include "FogOfWar.h"
-#include "MassExecutionContext.h"
+#include "MassCommonFragments.h"
 #include "Kismet/GameplayStatics.h"
 
 //----------------------------------------------------------------------//
 //  UMinimapAddProcessor
 //----------------------------------------------------------------------//
 UMinimapAddProcessor::UMinimapAddProcessor()
+	: EntityQuery(*this)
 {
 	ObservedType = FMassMinimapRepresentationFragment::StaticStruct();
 	Operation = EMassObservedOperation::Add;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 }
 
+void UMinimapAddProcessor::Initialize(UObject& Owner)
+{
+	Super::Initialize(Owner);
+	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+}
+
 void UMinimapAddProcessor::ConfigureQueries()
 {
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UMinimapAddProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	UMinimapDataSubsystem* MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	if (!MinimapDataSubsystem || !FogOfWarActor)
+	{
+		return;
+	}
+
+	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
+
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, GridResolution](FMassExecutionContext& Context)
+	{
+		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
+		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
+		const TConstArrayView<FMassVisionFragment> VisionList = Context.GetFragmentView<FMassVisionFragment>();
+		const TArrayView<FMassPreviousMinimapCellFragment> PrevCellList = Context.GetMutableFragmentView<FMassPreviousMinimapCellFragment>();
+
+		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
+		{
+			const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
+			const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
+			const FMassVisionFragment& VisionFragment = VisionList[i];
+			FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCellList[i];
+
+			const FIntVector2 TileIJ = FogOfWarActor->ConvertWorldLocationToTileIJ(FVector2D(WorldLocation));
+
+			if (TileIJ.X >= 0 && TileIJ.Y >= 0 && TileIJ.X < GridResolution.X && TileIJ.Y < GridResolution.Y)
+			{
+				const int32 Index = TileIJ.X * GridResolution.Y + TileIJ.Y;
+				FMinimapTile& Tile = MinimapDataSubsystem->MinimapTiles[Index];
+				
+				Tile.UnitCount++;
+				Tile.Color = RepFragment.IconColor;
+				Tile.MaxSightRadius = FMath::Max(Tile.MaxSightRadius, VisionFragment.SightRadius);
+				
+				PrevCellFragment.PrevCellCoords = FIntPoint(TileIJ.X, TileIJ.Y);
+			}
+		}
+	});
+}
+
+//----------------------------------------------------------------------//
+//  UMinimapRemoveProcessor
+//----------------------------------------------------------------------//
+UMinimapRemoveProcessor::UMinimapRemoveProcessor()
+	: EntityQuery(*this)
+{
+	ObservedType = FMassMinimapRepresentationFragment::StaticStruct();
+	Operation = EMassObservedOperation::Remove;
+	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
+
+void UMinimapRemoveProcessor::Initialize(UObject& Owner)
+{
+	Super::Initialize(Owner);
+	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+}
+
+void UMinimapRemoveProcessor::ConfigureQueries()
+{
+	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.RegisterWithProcessor(*this);
+}
+
+void UMinimapRemoveProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+{
 	if (!MinimapDataSubsystem)
 	{
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [MinimapDataSubsystem](FMassExecutionContext& Context)
+	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
+
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, GridResolution](FMassExecutionContext& Context)
 	{
-		const auto& LocationList = Context.GetFragmentView<FTransformFragment>();
-		const auto& RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
-		
+		const TConstArrayView<FMassPreviousMinimapCellFragment> PrevCellList = Context.GetFragmentView<FMassPreviousMinimapCellFragment>();
+
 		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
 		{
-			const FMassEntityHandle Entity = Context.GetEntity(i);
-			const FVector& Location = LocationList[i].GetTransform().GetLocation();
-			const auto& RepFragment = RepList[i];
+			const FIntPoint& PrevCellCoords = PrevCellList[i].PrevCellCoords;
 
-			MinimapDataSubsystem->IconLocations.Add(Entity, FVector4(Location.X, Location.Y, RepFragment.IconSize, RepFragment.Intensity));
-			
+			if (PrevCellCoords.X >= 0 && PrevCellCoords.Y >= 0 && PrevCellCoords.X < GridResolution.X && PrevCellCoords.Y < GridResolution.Y)
+			{
+				const int32 Index = PrevCellCoords.X * GridResolution.Y + PrevCellCoords.Y;
+				FMinimapTile& Tile = MinimapDataSubsystem->MinimapTiles[Index];
+
+				Tile.UnitCount--;
+				if (Tile.UnitCount <= 0)
+				{
+					Tile.Color = FLinearColor::Black;
+					Tile.UnitCount = 0; // Clamp at 0
+					Tile.MaxSightRadius = 0.0f;
+				}
+			}
 		}
 	});
 }
@@ -53,120 +135,83 @@ void UMinimapAddProcessor::Execute(FMassEntityManager& EntityManager, FMassExecu
 //----------------------------------------------------------------------//
 //  UMinimapUpdateProcessor
 //----------------------------------------------------------------------//
-
 UMinimapUpdateProcessor::UMinimapUpdateProcessor()
-	: RepresentationQuery(*this)
-{
-	bAutoRegisterWithProcessingPhases = true;
-	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-	// 在观察者之后运行，确保Tag已经被正确更新
-	ExecutionOrder.ExecuteAfter.Add(UMinimapObserverProcessor::StaticClass()->GetFName());
-}
-
-void UMinimapUpdateProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-}
-
-void UMinimapUpdateProcessor::ConfigureQueries()
-{
-    // 只查询那些需要在小地图上表示，并且其格子位置已发生变化的单位
-    RepresentationQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
-    RepresentationQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-    RepresentationQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
-	RepresentationQuery.AddTagRequirement<FMinimapCellChangedTag>(EMassFragmentPresence::All); // 核心优化
-    RepresentationQuery.RegisterWithProcessor(*this);
-}
-
-void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
-{
-	if (!MinimapDataSubsystem)
-	{
-		return;
-	}
-
-	RepresentationQuery.ForEachEntityChunk(EntityManager, Context, [this, &Context](FMassExecutionContext& ChunkContext)
-	{
-		const auto& LocationList = ChunkContext.GetFragmentView<FTransformFragment>();
-		const auto& RepList = ChunkContext.GetFragmentView<FMassMinimapRepresentationFragment>();
-		const auto& VisionList = ChunkContext.GetFragmentView<FMassVisionFragment>();
-		
-		for (int32 i = 0; i < ChunkContext.GetNumEntities(); ++i)
-		{
-			const FMassEntityHandle Entity = ChunkContext.GetEntity(i);
-			const FVector& Location = LocationList[i].GetTransform().GetLocation();
-			const auto& RepFragment = RepList[i];
-			const auto& VisionFragment = VisionList[i];
-
-			// 更新或添加数据到TMap
-			MinimapDataSubsystem->IconLocations.Add(Entity, FVector4(Location.X, Location.Y, RepFragment.IconSize, RepFragment.Intensity));
-			
-			MinimapDataSubsystem->VisionSources.Add(Entity, FVector4(Location.X, Location.Y, 0.0f, VisionFragment.SightRadius));
-
-			// 处理完后移除Tag，避免重复处理
-			ChunkContext.Defer().RemoveTag<FMinimapCellChangedTag>(Entity);
-		}
-	});
-}
-
-
-
-
-//----------------------------------------------------------------------//
-//  UMinimapObserverProcessor
-//----------------------------------------------------------------------//
-UMinimapObserverProcessor::UMinimapObserverProcessor()
+	: EntityQuery(*this)
 {
 	ObservedType = FTransformFragment::StaticStruct();
 	Operation = EMassObservedOperation::MAX;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 }
 
-void UMinimapObserverProcessor::Initialize(UObject& Owner)
+void UMinimapUpdateProcessor::Initialize(UObject& Owner)
 {
 	Super::Initialize(Owner);
+	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
 	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
 }
 
-void UMinimapObserverProcessor::ConfigureQueries()
+void UMinimapUpdateProcessor::ConfigureQueries()
 {
-	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.RegisterWithProcessor(*this);
 }
 
-void UMinimapObserverProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
+void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	if (!FogOfWarActor)
+	if (!MinimapDataSubsystem || !FogOfWarActor)
 	{
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, &Context](FMassExecutionContext& ChunkContext)
+	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
+
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, GridResolution](FMassExecutionContext& Context)
 	{
-		const TConstArrayView<FTransformFragment> Locations = ChunkContext.GetFragmentView<FTransformFragment>();
-		const TArrayView<FMassPreviousMinimapCellFragment> PrevCells = ChunkContext.GetMutableFragmentView<FMassPreviousMinimapCellFragment>();
+		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
+		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
+		const TConstArrayView<FMassVisionFragment> VisionList = Context.GetFragmentView<FMassVisionFragment>();
+		const TArrayView<FMassPreviousMinimapCellFragment> PrevCellList = Context.GetMutableFragmentView<FMassPreviousMinimapCellFragment>();
 
-		for (int32 i = 0; i < ChunkContext.GetNumEntities(); ++i)
+		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
 		{
-			const FVector& WorldLocation = Locations[i].GetTransform().GetLocation();
-			FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCells[i];
+			const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
+			const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
+			const FMassVisionFragment& VisionFragment = VisionList[i];
+			FMassPreviousMinimapCellFragment& PrevCellFragment = PrevCellList[i];
 
-			// Convert world location to grid location, then to tile IJ coordinates.
-			// This logic must be consistent with how the FOW grid is structured.
-			const FVector2f GridLocation = FogOfWarActor->ConvertWorldSpaceLocationToGridSpace(FVector2D(WorldLocation.X, WorldLocation.Y));
-			const FIntVector2 CurrentCellVec = FogOfWarActor->ConvertGridLocationToTileIJ(GridLocation);
-			const FIntPoint CurrentCell(CurrentCellVec.X, CurrentCellVec.Y);
+			const FIntVector2 CurrentTileIJ = FogOfWarActor->ConvertWorldLocationToTileIJ(FVector2D(WorldLocation));
 
-			if (CurrentCell != PrevCellFragment.PrevCellCoords)
+			if (CurrentTileIJ != FIntVector2(PrevCellFragment.PrevCellCoords.X, PrevCellFragment.PrevCellCoords.Y))
 			{
-				// The entity has moved to a new cell. Add a tag to mark it as "dirty"
-				// for the UMinimapDataCollectorProcessor to process later.
-				Context.Defer().AddTag<FMinimapCellChangedTag>(ChunkContext.GetEntity(i));
-				
-				// Update the last known cell coordinate.
-				PrevCellFragment.PrevCellCoords = CurrentCell;
+				// Decrement old tile
+				const FIntPoint& PrevCellCoords = PrevCellFragment.PrevCellCoords;
+				if (PrevCellCoords.X >= 0 && PrevCellCoords.Y >= 0 && PrevCellCoords.X < GridResolution.X && PrevCellCoords.Y < GridResolution.Y)
+				{
+					const int32 OldIndex = PrevCellCoords.X * GridResolution.Y + PrevCellCoords.Y;
+					FMinimapTile& OldTile = MinimapDataSubsystem->MinimapTiles[OldIndex];
+					OldTile.UnitCount--;
+					if (OldTile.UnitCount <= 0)
+					{
+						OldTile.Color = FLinearColor::Black;
+						OldTile.UnitCount = 0;
+						OldTile.MaxSightRadius = 0.0f;
+					}
+				}
+
+				// Increment new tile
+				if (CurrentTileIJ.X >= 0 && CurrentTileIJ.Y >= 0 && CurrentTileIJ.X < GridResolution.X && CurrentTileIJ.Y < GridResolution.Y)
+				{
+					const int32 NewIndex = CurrentTileIJ.X * GridResolution.Y + CurrentTileIJ.Y;
+					FMinimapTile& NewTile = MinimapDataSubsystem->MinimapTiles[NewIndex];
+					NewTile.UnitCount++;
+					NewTile.Color = RepFragment.IconColor;
+					NewTile.MaxSightRadius = FMath::Max(NewTile.MaxSightRadius, VisionFragment.SightRadius);
+				}
+
+				// Update the previous location fragment
+				PrevCellFragment.PrevCellCoords = FIntPoint(CurrentTileIJ.X, CurrentTileIJ.Y);
 			}
 		}
 	});
