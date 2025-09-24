@@ -10,7 +10,7 @@
  * This triggers the UVisionProcessor to recalculate vision for the moved entity.
  */
 UCLASS()
-class FOGOFWAR_API UMassLocationChangedObserver : public UMassObserverProcessor
+class FOGOFWAR_API UMassLocationChangedObserver : public UMassProcessor
 {
 	GENERATED_BODY()
 

@@ -58,7 +58,7 @@ private:
  * @brief Observes when an entity's transform changes, updating the tile grid by decrementing the old tile and incrementing the new tile.
  */
 UCLASS()
-class FOGOFWAR_API UMinimapUpdateProcessor : public UMassObserverProcessor
+class FOGOFWAR_API UMinimapUpdateProcessor : public UMassProcessor
 {
 	GENERATED_BODY()
 

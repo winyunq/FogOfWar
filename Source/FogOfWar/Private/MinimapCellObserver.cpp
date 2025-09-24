@@ -9,8 +9,7 @@
 UMinimapCellObserver::UMinimapCellObserver()
 	: EntityQuery(*this)
 {
-	// This processor now runs every frame on its queried entities.
-	Operation = EMassObservedOperation::MAX;
+	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 }
 

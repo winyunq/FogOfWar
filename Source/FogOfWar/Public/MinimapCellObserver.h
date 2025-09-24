@@ -10,7 +10,7 @@
  * if they have moved to a new minimap grid cell.
  */
 UCLASS()
-class FOGOFWAR_API UMinimapCellObserver : public UMassObserverProcessor
+class FOGOFWAR_API UMinimapCellObserver : public UMassProcessor
 {
 	GENERATED_BODY()
 

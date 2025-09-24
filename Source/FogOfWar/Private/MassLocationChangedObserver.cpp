@@ -8,8 +8,7 @@
 UMassLocationChangedObserver::UMassLocationChangedObserver()
 	: EntityQuery(*this)
 {
-	ObservedType = FTransformFragment::StaticStruct();
-	Operation = EMassObservedOperation::MAX;
+	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 }
 

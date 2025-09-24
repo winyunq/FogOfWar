@@ -179,7 +179,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Materials")
 	TObjectPtr<UMaterialInterface> PostProcessingMaterial;
 
-#if WITH_EDITORONLY_DATA
+//#if WITH_EDITORONLY_DATA
 	/// @brief 【调试】压力测试模式，忽略所有缓存，强制每帧重新计算所有单位的视野。
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
 	bool bDebugStressTestIgnoreCache = false;
@@ -199,7 +199,7 @@ public:
 	/// @brief 【调试】高度图纹理中代表的最高高度。
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
 	float DebugHeightmapHightestZ = 1000.0f;
-#endif
+// #endif
 	//~ End UPROPERTY Configuration
 
 protected:
