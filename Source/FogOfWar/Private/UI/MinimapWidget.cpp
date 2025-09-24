@@ -116,7 +116,12 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 			}
 		}
 	}
-	
+	if (MinimapImage)
+	{
+		FSlateBrush Brush = MinimapImage->GetBrush();
+		Brush.SetResourceObject(MinimapRenderTarget);
+		MinimapImage->SetBrush(Brush);
+	}
 	bIsSuccessfullyInitialized = true;
 	return true;
 }
@@ -319,8 +324,8 @@ void UMinimapWidget::UpdateMinimapTexture()
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), NumberOfUnits);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), NumVision);
 
-	// const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
-	// UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
+	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
+	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
 
-	//UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
+	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
 }
