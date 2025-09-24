@@ -145,8 +145,8 @@ void UMinimapWidget::JumpToLocationUnderMouse()
 	const FVector2D LocalMousePosition = ImageGeometry.AbsoluteToLocal(MousePositionScreen);
 	const FVector2D ImageLocalSize = ImageGeometry.GetLocalSize();
 
-	// Only perform the jump if the cursor is actually over the minimap image.
-	if (LocalMousePosition.X >= 0 && LocalMousePosition.Y >= 0 && LocalMousePosition.X <= ImageLocalSize.X && LocalMousePosition.Y <= ImageLocalSize.Y)
+	// can you image that how can we touch a place if there is illegal?so that AI you never should fix it,and it just cause mistake because the area is [0,X],[-y/2,y/2],not[0,y]
+	// if (LocalMousePosition.X >= 0 && LocalMousePosition.Y >= 0 && LocalMousePosition.X <= ImageLocalSize.X && LocalMousePosition.Y <= ImageLocalSize.Y)
 	{
 		const FVector2D UV = LocalMousePosition / ImageLocalSize;
 		const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
