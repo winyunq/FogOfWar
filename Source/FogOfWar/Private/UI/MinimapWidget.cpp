@@ -59,21 +59,27 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 		return false;
 	}
 
+	// Now that we have a valid FogOfWarActor, initialize the subsystem that depends on it.
+	if (MinimapDataSubsystem)
+	{
+		MinimapDataSubsystem->InitializeFromWidget(FogOfWarActor, TextureResolution);
+	}
+
 	if (!MinimapRenderTarget)
 	{
 		MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::RTF_RGBA8);
 	}
 	if (!VisionDataTexture)
 	{
-		VisionDataTexture = CreateDynamicDataTexture(this, 128, 1, TEXT("VisionDataTexture"));
+		VisionDataTexture = CreateDynamicDataTexture(this, MaxUnits, 1, TEXT("VisionDataTexture"));
 	}
 	if (!IconDataTexture)
 	{
-		IconDataTexture = CreateDynamicDataTexture(this, 256, 1, TEXT("IconDataTexture"));
+		IconDataTexture = CreateDynamicDataTexture(this, MaxUnits, 1, TEXT("IconDataTexture"));
 	}
 	if (!IconColorTexture)
 	{
-		IconColorTexture = CreateDynamicDataTexture(this, 256, 1, TEXT("IconColorTexture"));
+		IconColorTexture = CreateDynamicDataTexture(this, MaxUnits, 1, TEXT("IconColorTexture"));
 	}
 
 	if (!MinimapMaterial)
@@ -275,10 +281,10 @@ void UMinimapWidget::UpdateMinimapTexture()
 			const FIntVector2 TileIJ(i / GridResolution.Y, i % GridResolution.Y);
 			
 			// Convert grid coordinates to world location for the shader
-			const FVector2D WorldLocation = FogOfWarActor->ConvertTileIJToTileCenterWorldLocation(TileIJ);
+			const FVector2D WorldLocation = MinimapDataSubsystem->ConvertMinimapTileIJToWorldLocation(FIntPoint(TileIJ.X, TileIJ.Y));
 
 			// Add icon data
-			TempIconLocations.Add(FVector4(WorldLocation.X, WorldLocation.Y, 25.0f, 1.0f));
+			TempIconLocations.Add(FVector4(WorldLocation.X, WorldLocation.Y, Tile.MaxIconSize, 1.0f));
 			TempIconColors.Add(Tile.Color);
 
 			// If the tile has a sight radius, add it to the vision sources list for the GPU.

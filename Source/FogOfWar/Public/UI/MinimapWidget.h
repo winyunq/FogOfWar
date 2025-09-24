@@ -79,7 +79,9 @@ protected:
 	/** 小地图更新的频率（秒）。0表示每帧更新。*/
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (ClampMin = "0.0"))
 	float UpdateInterval = 1.0f;
-
+	/// 单位数量
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (ClampMin = "0.0"))
+	int32 MaxUnits = 8192;
 	// --- 自动绑定和内部状态 (Internal State) ---
 
 	/** 【自动绑定】请在UMG编辑器中，将您的Image控件命名为'MinimapImage' */
