@@ -266,11 +266,11 @@ void UMinimapWidget::UpdateMinimapTexture()
 	CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	const int32 TotalUnitCount = CountQuery.GetNumMatchingEntities(EntitySubsystem->GetMutableEntityManager());
 
-	// if (TotalUnitCount <= DirectQueryThreshold)
-	// {
-	// 	DrawInLessSize();
-	// }
-	// else
+	if (TotalUnitCount <= DirectQueryThreshold)
+	{
+		DrawInLessSize();
+	}
+	else
 	{
 		DrawInMassSize();
 	}
@@ -278,83 +278,78 @@ void UMinimapWidget::UpdateMinimapTexture()
 
 void UMinimapWidget::DrawInLessSize()
 {
-	// UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
-	// if (!EntitySubsystem || !IconDataTexture || !IconColorTexture || !VisionDataTexture)
-	// {
-	// 	return;
-	// }
+	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+	if (!EntitySubsystem || !IconDataTexture || !IconColorTexture || !VisionDataTexture)
+	{
+		return;
+	}
 
-	// FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
 
-	// // --- 1. Lock Textures for Direct Writing ---
-	// FTexture2DMipMap& IconDataMip = IconDataTexture->GetPlatformData()->Mips[0];
-	// FLinearColor* IconDataPtr = static_cast<FLinearColor*>(IconDataMip.BulkData.Lock(LOCK_READ_WRITE));
+	// --- 1. Lock Textures for Direct Writing ---
+	FTexture2DMipMap& IconDataMip = IconDataTexture->GetPlatformData()->Mips[0];
+	FLinearColor* IconDataPtr = static_cast<FLinearColor*>(IconDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
-	// FTexture2DMipMap& IconColorMip = IconColorTexture->GetPlatformData()->Mips[0];
-	// FLinearColor* IconColorPtr = static_cast<FLinearColor*>(IconColorMip.BulkData.Lock(LOCK_READ_WRITE));
+	FTexture2DMipMap& IconColorMip = IconColorTexture->GetPlatformData()->Mips[0];
+	FLinearColor* IconColorPtr = static_cast<FLinearColor*>(IconColorMip.BulkData.Lock(LOCK_READ_WRITE));
 
-	// FTexture2DMipMap& VisionDataMip = VisionDataTexture->GetPlatformData()->Mips[0];
-	// FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
+	FTexture2DMipMap& VisionDataMip = VisionDataTexture->GetPlatformData()->Mips[0];
+	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
-	// // --- 2. Define and Execute Query for All Minimap Entities ---
-	// FMassEntityQuery EntityQuery;
-	// EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
-	// EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-	// EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
+	// --- 2. Define and Execute Query for All Minimap Entities ---
+	FMassEntityQuery EntityQuery;
+	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 
-	// TArray<FMassArchetypeHandle> Archetypes;
-	// EntityQuery.GetArchetypes(EntityManager, Archetypes);
+	int32 UnitCount = 0;
+	int32 VisionSourceCount = 0;
 
-	// int32 UnitCount = 0;
-	// int32 VisionSourceCount = 0;
+	FMassExecutionContext Context(EntityManager, 0.f, false); // Create a temporary execution context
+	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
+	{
+		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
+		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
+		const TConstArrayView<FMassVisionFragment> VisionList = Context.GetFragmentView<FMassVisionFragment>();
 
-	// for (const FMassArchetypeHandle& ArchetypeHandle : Archetypes)
-	// {
-	// 	FMassArchetypeEntityCollection EntityCollection = EntityManager.GetArchetypeEntityCollection(ArchetypeHandle);
+		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
+		{
+			if (UnitCount >= MaxUnits) break;
 
-	// 	const FMassFragmentView<FTransformFragment> LocationList = EntityManager.GetFragmentView<FTransformFragment>(ArchetypeHandle);
-	// 	const FMassFragmentView<FMassMinimapRepresentationFragment> RepList = EntityManager.GetFragmentView<FMassMinimapRepresentationFragment>(ArchetypeHandle);
-	// 	const FMassFragmentView<FMassVisionFragment> VisionList = EntityManager.GetFragmentView<FMassVisionFragment>(ArchetypeHandle);
+			const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
+			const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
+			const FMassVisionFragment& VisionFragment = VisionList[i];
 
-	// 	for (int32 i = 0; i < EntityCollection.Num(); ++i)
-	// 	{
-	// 		if (UnitCount >= MaxUnits) break;
+			// Write data directly to texture pointers
+			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, RepFragment.IconSize, 1.0f);
+			IconColorPtr[UnitCount] = RepFragment.IconColor;
+			UnitCount++;
 
-	// 		const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
-	// 		const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
-	// 		const FMassVisionFragment& VisionFragment = VisionList[i];
+			if (VisionFragment.SightRadius > 0.0f)
+			{
+				if (VisionSourceCount >= MaxUnits) break;
+				VisionDataPtr[VisionSourceCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, 0.0f, VisionFragment.SightRadius);
+				VisionSourceCount++;
+			}
+		}
+	});
 
-	// 		// Write data directly to texture pointers
-	// 		IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, RepFragment.IconSize, 1.0f);
-	// 		IconColorPtr[UnitCount] = RepFragment.IconColor;
-	// 		UnitCount++;
+	// --- 3. Unlock Textures & Finalize ---
+	IconDataMip.BulkData.Unlock();
+	IconColorMip.BulkData.Unlock();
+	VisionDataMip.BulkData.Unlock();
+	IconDataTexture->UpdateResource();
+	IconColorTexture->UpdateResource();
+	VisionDataTexture->UpdateResource();
 
-	// 		if (VisionFragment.SightRadius > 0.0f)
-	// 		{
-	// 			if (VisionSourceCount >= MaxUnits) break;
-	// 			VisionDataPtr[VisionSourceCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, 0.0f, VisionFragment.SightRadius);
-	// 			VisionSourceCount++;
-	// 		}
-	// 	}
-	// 	if (UnitCount >= MaxUnits) break;
-	// }
+	UE_LOG(LogMinimapWidget, Log, TEXT("DrawInLessSize: %d vision sources, %d icons."), VisionSourceCount, UnitCount);
 
-	// // --- 3. Unlock Textures & Finalize ---
-	// IconDataMip.BulkData.Unlock();
-	// IconColorMip.BulkData.Unlock();
-	// VisionDataMip.BulkData.Unlock();
-	// IconDataTexture->UpdateResource();
-	// IconColorTexture->UpdateResource();
-	// VisionDataTexture->UpdateResource();
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
 
-	// UE_LOG(LogMinimapWidget, Log, TEXT("DrawInLessSize: %d vision sources, %d icons."), VisionSourceCount, UnitCount);
-
-	// MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
-	// MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
-
-	// const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
-	// UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
-	// UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
+	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
+	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
+	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
 }
 
 void UMinimapWidget::DrawInMassSize()
