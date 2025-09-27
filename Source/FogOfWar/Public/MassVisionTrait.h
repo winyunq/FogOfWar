@@ -43,7 +43,7 @@ protected:
 
 	/** 图标的尺寸（小地图像素）。*/
 	UPROPERTY(EditAnywhere, Category = "Minimap", meta = (EditCondition = "bShouldBeRepresentedOnMinimap", ClampMin = "0.0"))
-	float MinimapIconSize = 2.5;
+	float MinimapIconSize = 1.5;
 
 	/** （高级）是否让该单位的图标无视战争迷雾，始终在小地图上可见？（例如任务单位）*/
 	UPROPERTY(EditAnywhere, Category = "Minimap", meta = (EditCondition = "bShouldBeRepresentedOnMinimap"))
