@@ -11,30 +11,24 @@ UMinimapCellObserver::UMinimapCellObserver()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-}
 
-void UMinimapCellObserver::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-}
-
-void UMinimapCellObserver::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UMinimapCellObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
 	if (!MinimapDataSubsystem)
 	{
+		MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	}
+	if (!MinimapDataSubsystem)
+	{
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
 		const TConstArrayView<FMassPreviousMinimapCellFragment> PrevCellList = Context.GetFragmentView<FMassPreviousMinimapCellFragment>();

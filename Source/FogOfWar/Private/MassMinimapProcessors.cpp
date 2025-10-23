@@ -15,25 +15,19 @@ UMinimapAddProcessor::UMinimapAddProcessor()
 	ObservedType = FMassMinimapRepresentationFragment::StaticStruct();
 	Operation = EMassObservedOperation::Add;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-}
 
-void UMinimapAddProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-}
-
-void UMinimapAddProcessor::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadWrite);
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UMinimapAddProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
+	if (!MinimapDataSubsystem)
+	{
+		MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	}
 	if (!MinimapDataSubsystem)
 	{
 		return;
@@ -41,7 +35,7 @@ void UMinimapAddProcessor::Execute(FMassEntityManager& EntityManager, FMassExecu
 
 	const FIntPoint MinimapResolution = MinimapDataSubsystem->GridResolution;
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, MinimapResolution](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this, MinimapResolution](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
 		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
@@ -82,22 +76,16 @@ UMinimapRemoveProcessor::UMinimapRemoveProcessor()
 	ObservedType = FMassMinimapRepresentationFragment::StaticStruct();
 	Operation = EMassObservedOperation::Remove;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-}
 
-void UMinimapRemoveProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-}
-
-void UMinimapRemoveProcessor::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadOnly);
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UMinimapRemoveProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
+	if (!MinimapDataSubsystem)
+	{
+		MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	}
 	if (!MinimapDataSubsystem)
 	{
 		return;
@@ -105,7 +93,7 @@ void UMinimapRemoveProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 
 	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, GridResolution](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this, GridResolution](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FMassPreviousMinimapCellFragment> PrevCellList = Context.GetFragmentView<FMassPreviousMinimapCellFragment>();
 
@@ -140,26 +128,20 @@ UMinimapUpdateProcessor::UMinimapUpdateProcessor()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-}
 
-void UMinimapUpdateProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-}
-
-void UMinimapUpdateProcessor::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddTagRequirement<FMinimapCellChangedTag>(EMassFragmentPresence::All);
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
+	if (!MinimapDataSubsystem)
+	{
+		MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	}
 	if (!MinimapDataSubsystem)
 	{
 		UE_LOG(LogTemp, Error, TEXT("UMinimapUpdateProcessor: MinimapDataSubsystem is null."));
@@ -168,7 +150,7 @@ void UMinimapUpdateProcessor::Execute(FMassEntityManager& EntityManager, FMassEx
 
 	const FIntPoint MinimapResolution = MinimapDataSubsystem->GridResolution;
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, MinimapResolution](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this, MinimapResolution](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
 		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();

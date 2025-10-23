@@ -52,22 +52,6 @@ public:
 
 protected:
 	/**
-	 * @brief       初始化处理器。
-	 * @details     在处理器开始运行时调用一次，用于获取对AFogOfWar主控Actor的引用。
-	 *
-	 * @param       Owner                          数据类型: UObject&
-	 * @details     拥有此处理器的对象，通常是UMassSimulationSubsystem。
-	 */
-	virtual void Initialize(UObject& Owner) override;
-
-	/**
-	 * @brief       配置Mass实体查询。
-	 * @details     设置处理器需要处理的实体原型（Archetype）。
-	 *              查询条件为：包含FMassVisionEntityTag，但不包含FMassVisionInitializedTag。
-	 */
-	virtual void ConfigureQueries() override;
-
-	/**
 	 * @brief       执行处理器逻辑。
 	 * @details     在每一帧（或根据设置的频率）对查询到的实体块执行此函数。
 	 *              它会调用辅助函数ProcessEntityChunk来计算视野，并为处理过的实体添加FMassVisionInitializedTag。
@@ -104,22 +88,6 @@ public:
 
 protected:
 	/**
-	 * @brief       初始化处理器。
-	 * @details     在处理器开始运行时调用一次，用于获取对AFogOfWar主控Actor的引用。
-	 *
-	 * @param       Owner                          数据类型: UObject&
-	 * @details     拥有此处理器的对象，通常是UMassSimulationSubsystem。
-	 */
-	virtual void Initialize(UObject& Owner) override;
-
-	/**
-	 * @brief       配置Mass实体查询。
-	 * @details     设置处理器需要处理的实体原型（Archetype）。
-	 *              查询条件为：包含FMassVisionEntityTag和FMassLocationChangedTag。
-	 */
-	virtual void ConfigureQueries() override;
-
-	/**
 	 * @brief       执行处理器逻辑。
 	 * @details     在每一帧（或根据设置的频率）对查询到的实体块执行此函数。
 	 *              它会调用辅助函数ProcessEntityChunk来更新移动单位的视野。
@@ -154,8 +122,6 @@ public:
 	UDebugStressTestProcessor();
 
 protected:
-	virtual void Initialize(UObject& Owner) override;
-	virtual void ConfigureQueries() override;
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:

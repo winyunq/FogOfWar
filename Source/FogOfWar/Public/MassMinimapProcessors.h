@@ -21,8 +21,6 @@ public:
 	UMinimapAddProcessor();
 
 protected:
-	virtual void Initialize(UObject& Owner) override;
-	virtual void ConfigureQueries() override;
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:
@@ -44,8 +42,6 @@ public:
 	UMinimapRemoveProcessor();
 
 protected:
-	virtual void Initialize(UObject& Owner) override;
-	virtual void ConfigureQueries() override;
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:
@@ -66,8 +62,6 @@ public:
 	UMinimapUpdateProcessor();
 
 protected:
-	virtual void Initialize(UObject& Owner) override;
-	virtual void ConfigureQueries() override;
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
 
 private:

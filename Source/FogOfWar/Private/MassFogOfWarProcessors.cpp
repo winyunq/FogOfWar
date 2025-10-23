@@ -252,31 +252,25 @@ UInitialVisionProcessor::UInitialVisionProcessor()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-}
 
-void UInitialVisionProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-}
-
-void UInitialVisionProcessor::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousVisionFragment>(EMassFragmentAccess::ReadWrite);
 	EntityQuery.AddTagRequirement<FMassVisionInitializedTag>(EMassFragmentPresence::None); // Run only on uninitialized entities
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UInitialVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
+	if (!FogOfWarActor.Get())
+	{
+		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	}
 	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
 	{
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
 	{
 		FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
 
@@ -301,16 +295,7 @@ UVisionProcessor::UVisionProcessor()
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 	ExecutionOrder.ExecuteAfter.Add(UInitialVisionProcessor::StaticClass()->GetFName()); // Ensure initial vision runs first
 	// ExecutionOrder.ExecuteAfter.Add(UMassVisibilityProcessor::StaticClass()->GetFName()); // Ensure vision update runs after visibility processor
-}
 
-void UVisionProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-}
-
-void UVisionProcessor::ConfigureQueries()
-{
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
     EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousVisionFragment>(EMassFragmentAccess::ReadWrite);
@@ -321,18 +306,20 @@ void UVisionProcessor::ConfigureQueries()
 	// 即：实体不能有“被距离剔除”的Tag，也不能有“被视锥体剔除”的Tag。
 	EntityQuery.AddTagRequirement<FMassVisibilityCulledByDistanceTag>(EMassFragmentPresence::None);
 	EntityQuery.AddTagRequirement<FMassVisibilityCulledByFrustumTag>(EMassFragmentPresence::None);
-
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
+	if (!FogOfWarActor.Get())
+	{
+		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	}
 	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
 	{
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
 	{
 		FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
 
@@ -355,25 +342,19 @@ UDebugStressTestProcessor::UDebugStressTestProcessor()
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 	// 必须在 UVisionProcessor 之前运行
 	ExecutionOrder.ExecuteBefore.Add(UVisionProcessor::StaticClass()->GetFName());
-}
 
-void UDebugStressTestProcessor::Initialize(UObject& Owner)
-{
-	Super::Initialize(Owner);
-	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-}
-
-void UDebugStressTestProcessor::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
 	// 我们需要查询所有可见单位，无论它们是否已改变位置
 	// EntityQuery.AddConstSharedRequirement<FMassVisibilityFragment>(EMassFragmentPresence::All);
-	EntityQuery.RegisterWithProcessor(*this);
 }
 
 void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
+	if (!FogOfWarActor.Get())
+	{
+		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	}
 	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
 	{
 		return;
@@ -387,7 +368,7 @@ void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMass
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
 	{
 		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
 		for (const FMassEntityHandle& Entity : Entities)

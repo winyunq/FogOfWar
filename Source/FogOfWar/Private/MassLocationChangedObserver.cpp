@@ -10,10 +10,7 @@ UMassLocationChangedObserver::UMassLocationChangedObserver()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
-}
 
-void UMassLocationChangedObserver::ConfigureQueries()
-{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	// We only want to add the tag to entities that are actually vision providers.
 	EntityQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
@@ -21,7 +18,7 @@ void UMassLocationChangedObserver::ConfigureQueries()
 
 void UMassLocationChangedObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
 	{
 		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
 		for (const FMassEntityHandle& Entity : Entities)
