@@ -15,7 +15,10 @@ UMinimapAddProcessor::UMinimapAddProcessor()
 	ObservedType = FMassMinimapRepresentationFragment::StaticStruct();
 	Operation = EMassObservedOperation::Add;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
 
+void UMinimapAddProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
@@ -76,7 +79,10 @@ UMinimapRemoveProcessor::UMinimapRemoveProcessor()
 	ObservedType = FMassMinimapRepresentationFragment::StaticStruct();
 	Operation = EMassObservedOperation::Remove;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
 
+void UMinimapRemoveProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadOnly);
 }
 
@@ -128,7 +134,10 @@ UMinimapUpdateProcessor::UMinimapUpdateProcessor()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
 
+void UMinimapUpdateProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);

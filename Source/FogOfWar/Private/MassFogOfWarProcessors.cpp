@@ -252,7 +252,10 @@ UInitialVisionProcessor::UInitialVisionProcessor()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
 
+void UInitialVisionProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousVisionFragment>(EMassFragmentAccess::ReadWrite);
@@ -295,7 +298,10 @@ UVisionProcessor::UVisionProcessor()
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 	ExecutionOrder.ExecuteAfter.Add(UInitialVisionProcessor::StaticClass()->GetFName()); // Ensure initial vision runs first
 	// ExecutionOrder.ExecuteAfter.Add(UMassVisibilityProcessor::StaticClass()->GetFName()); // Ensure vision update runs after visibility processor
+}
 
+void UVisionProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
     EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
     EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousVisionFragment>(EMassFragmentAccess::ReadWrite);
@@ -342,7 +348,10 @@ UDebugStressTestProcessor::UDebugStressTestProcessor()
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 	// 必须在 UVisionProcessor 之前运行
 	ExecutionOrder.ExecuteBefore.Add(UVisionProcessor::StaticClass()->GetFName());
+}
 
+void UDebugStressTestProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
 	// 我们需要查询所有可见单位，无论它们是否已改变位置

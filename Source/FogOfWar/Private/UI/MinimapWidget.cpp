@@ -264,7 +264,7 @@ void UMinimapWidget::UpdateMinimapTexture()
 	// Decide which drawing path to take based on the number of units.
 	FMassEntityQuery CountQuery;
 	CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-	const int32 TotalUnitCount = CountQuery.GetNumMatchingEntities(EntitySubsystem->GetMutableEntityManager());
+	const int32 TotalUnitCount = CountQuery.GetNumMatchingEntities();
 
 	if (TotalUnitCount <= DirectQueryThreshold)
 	{
@@ -306,7 +306,7 @@ void UMinimapWidget::DrawInLessSize()
 	int32 VisionSourceCount = 0;
 
 	FMassExecutionContext Context(EntityManager, 0.f, false); // Create a temporary execution context
-	EntityQuery.ForEachEntityChunk(EntityManager, Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
 		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();

@@ -19,6 +19,7 @@ public:
 
 protected:
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
 private:
 	FMassEntityQuery EntityQuery;

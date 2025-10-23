@@ -11,7 +11,10 @@ UMinimapCellObserver::UMinimapCellObserver()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
 
+void UMinimapCellObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);

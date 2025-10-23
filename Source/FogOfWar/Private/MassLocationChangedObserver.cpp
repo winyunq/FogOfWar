@@ -10,7 +10,10 @@ UMassLocationChangedObserver::UMassLocationChangedObserver()
 {
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
+}
 
+void UMassLocationChangedObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
+{
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	// We only want to add the tag to entities that are actually vision providers.
 	EntityQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);

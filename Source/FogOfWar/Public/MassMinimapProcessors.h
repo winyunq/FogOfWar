@@ -16,13 +16,11 @@ UCLASS()
 class FOGOFWAR_API UMinimapAddProcessor : public UMassObserverProcessor
 {
 	GENERATED_BODY()
-
 public:
 	UMinimapAddProcessor();
-
 protected:
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
-
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 private:
 	TObjectPtr<AFogOfWar> FogOfWarActor;
 	TObjectPtr<UMinimapDataSubsystem> MinimapDataSubsystem;
@@ -40,9 +38,9 @@ class FOGOFWAR_API UMinimapRemoveProcessor : public UMassObserverProcessor
 
 public:
 	UMinimapRemoveProcessor();
-
 protected:
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
 private:
 	TObjectPtr<UMinimapDataSubsystem> MinimapDataSubsystem;
@@ -57,12 +55,11 @@ UCLASS()
 class FOGOFWAR_API UMinimapUpdateProcessor : public UMassProcessor
 {
 	GENERATED_BODY()
-
 public:
 	UMinimapUpdateProcessor();
-
 protected:
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
 private:
 	TObjectPtr<AFogOfWar> FogOfWarActor;

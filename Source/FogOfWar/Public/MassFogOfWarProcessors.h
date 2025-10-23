@@ -62,6 +62,7 @@ protected:
 	 * @details     当前的执行上下文。
 	 */
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
 private:
 	/// @brief 指向场景中AFogOfWar主控Actor的指针，在Initialize时被缓存。
@@ -98,6 +99,7 @@ protected:
 	 * @details     当前的执行上下文。
 	 */
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
 private:
 	/// @brief 指向场景中AFogOfWar主控Actor的指针，在Initialize时被缓存。
@@ -123,6 +125,7 @@ public:
 
 protected:
 	virtual void Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context) override;
+	virtual void ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager) override;
 
 private:
 	TObjectPtr<AFogOfWar> FogOfWarActor;
