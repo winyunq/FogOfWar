@@ -264,26 +264,26 @@ void UInitialVisionProcessor::ConfigureQueries(const TSharedRef<FMassEntityManag
 
 void UInitialVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	if (!FogOfWarActor.Get())
-	{
-		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	}
-	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
-	{
-		return;
-	}
+	//if (!FogOfWarActor.Get())
+	//{
+	//	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	//}
+	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
+	//{
+	//	return;
+	//}
 
-	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
-	{
-		FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
+	//EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+	//{
+	//	FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
 
-		// Add initialized tag to all entities in the chunk
-		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
-		for (const FMassEntityHandle& Entity : Entities)
-		{
-			Context.Defer().AddTag<FMassVisionInitializedTag>(Entity);
-		}
-	});
+	//	// Add initialized tag to all entities in the chunk
+	//	const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
+	//	for (const FMassEntityHandle& Entity : Entities)
+	//	{
+	//		Context.Defer().AddTag<FMassVisionInitializedTag>(Entity);
+	//	}
+	//});
 }
 
 
@@ -316,26 +316,26 @@ void UVisionProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& En
 
 void UVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	if (!FogOfWarActor.Get())
-	{
-		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	}
-	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
-	{
-		return;
-	}
+	//if (!FogOfWarActor.Get())
+	//{
+	//	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	//}
+	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
+	//{
+	//	return;
+	//}
 
-	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
-	{
-		FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
+	//EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+	//{
+	//	FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
 
-		// Remove location changed tag from all entities in the chunk
-		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
-		for (const FMassEntityHandle& Entity : Entities)
-		{
-			Context.Defer().RemoveTag<FMassLocationChangedTag>(Entity);
-		}
-	});
+	//	// Remove location changed tag from all entities in the chunk
+	//	const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
+	//	for (const FMassEntityHandle& Entity : Entities)
+	//	{
+	//		Context.Defer().RemoveTag<FMassLocationChangedTag>(Entity);
+	//	}
+	//});
 }
 
 //----------------------------------------------------------------------//
@@ -360,37 +360,37 @@ void UDebugStressTestProcessor::ConfigureQueries(const TSharedRef<FMassEntityMan
 
 void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	if (!FogOfWarActor.Get())
-	{
-		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	}
-	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
-	{
-		return;
-	}
+	//if (!FogOfWarActor.Get())
+	//{
+	//	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	//}
+	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
+	//{
+	//	return;
+	//}
 
-	const bool bForceVisionUpdate = FogOfWarActor->bDebugStressTestIgnoreCache;
-	const bool bForceMinimapUpdate = FogOfWarActor->bDebugStressTestMinimap;
+	//const bool bForceVisionUpdate = FogOfWarActor->bDebugStressTestIgnoreCache;
+	//const bool bForceMinimapUpdate = FogOfWarActor->bDebugStressTestMinimap;
 
-	if (!bForceVisionUpdate && !bForceMinimapUpdate)
-	{
-		return;
-	}
+	//if (!bForceVisionUpdate && !bForceMinimapUpdate)
+	//{
+	//	return;
+	//}
 
-	EntityQuery.ForEachEntityChunk(Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
-	{
-		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
-		for (const FMassEntityHandle& Entity : Entities)
-		{
-			if (bForceVisionUpdate)
-			{
-				Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
-			}
-			if (bForceMinimapUpdate)
-			{
-				Context.Defer().AddTag<FMinimapCellChangedTag>(Entity);
-			}
-		}
-	});
+	//EntityQuery.ForEachEntityChunk(Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
+	//{
+	//	const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
+	//	for (const FMassEntityHandle& Entity : Entities)
+	//	{
+	//		if (bForceVisionUpdate)
+	//		{
+	//			Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
+	//		}
+	//		if (bForceMinimapUpdate)
+	//		{
+	//			Context.Defer().AddTag<FMinimapCellChangedTag>(Entity);
+	//		}
+	//	}
+	//});
 }
 

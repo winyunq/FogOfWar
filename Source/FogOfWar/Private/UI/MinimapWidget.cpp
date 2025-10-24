@@ -262,7 +262,8 @@ void UMinimapWidget::UpdateMinimapTexture()
 	}
 
 	// Decide which drawing path to take based on the number of units.
-	FMassEntityQuery CountQuery;
+	// In UE 5.6, FMassEntityQuery must be initialized with an FMassEntityManager.
+	FMassEntityQuery CountQuery(EntitySubsystem->GetMutableEntityManager().AsShared());
 	CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	const int32 TotalUnitCount = CountQuery.GetNumMatchingEntities();
 
@@ -297,7 +298,8 @@ void UMinimapWidget::DrawInLessSize()
 	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
 	// --- 2. Define and Execute Query for All Minimap Entities ---
-	FMassEntityQuery EntityQuery;
+	// In UE 5.6, FMassEntityQuery must be initialized with an FMassEntityManager.
+	FMassEntityQuery EntityQuery(EntityManager.AsShared());
 	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
@@ -305,7 +307,8 @@ void UMinimapWidget::DrawInLessSize()
 	int32 UnitCount = 0;
 	int32 VisionSourceCount = 0;
 
-	FMassExecutionContext Context(EntityManager, 0.f, false); // Create a temporary execution context
+	// The FMassExecutionContext is now created via the EntityManager and passed to the query.
+	FMassExecutionContext Context = EntityManager.CreateExecutionContext(0.f);
 	EntityQuery.ForEachEntityChunk(Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
