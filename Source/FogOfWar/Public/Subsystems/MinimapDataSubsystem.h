@@ -6,6 +6,8 @@
 #include "MassSubsystemBase.h"
 #include "MinimapDataSubsystem.generated.h"
 
+class AFogOfWar;
+
 /**
  * Represents a single tile on the minimap grid.
  */
@@ -34,8 +36,8 @@ struct FOGOFWAR_API FMinimapTile
 /**
  * UMinimapDataSubsystem
  * 
- * A global subsystem that holds the grid data for the minimap.
- * This data is written to by Mass processors and read by the UMinimapWidget.
+ * A global subsystem that holds and manages grid data and coordinate conversions for both the low-resolution Minimap and the high-resolution Vision grid.
+ * This is the single source of truth for all grid calculations. It relies on the AFogOfWar actor to register its parameters upon activation.
  */
 UCLASS()
 class FOGOFWAR_API UMinimapDataSubsystem : public UMassSubsystemBase
@@ -43,78 +45,141 @@ class FOGOFWAR_API UMinimapDataSubsystem : public UMassSubsystemBase
 	GENERATED_BODY()
 
 public:
-    /** The resolution of the minimap grid. */
-    UPROPERTY(Transient)
-    FIntPoint GridResolution = FIntPoint(256, 256);
+	//~ Begin UMassSubsystemBase Interface
+	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
+	virtual void Deinitialize() override;
+	//~ End UMassSubsystemBase Interface
 
-	/** The size of the grid in world units. Copied from AFogOfWar on initialization. */
+	/** Provides direct, static access to the singleton instance of the subsystem for high-performance code paths. */
+	static FORCEINLINE UMinimapDataSubsystem* Get() { return SingletonInstance; }
+
+	/** Called by AFogOfWar when it has activated and its grid parameters are ready. */
+	void UpdateVisionGridParameters(AFogOfWar* InFogOfWarActor);
+
+	/** Called by the Minimap UI Widget to set its desired resolution. */
+	void SetMinimapResolution(const FIntPoint& NewResolution);
+
+public:
+	/** Flag to indicate if the subsystem has received valid grid parameters and is ready for use. */
+	UPROPERTY(BlueprintReadOnly, Category="Minimap")
+	bool bIsInitialized = false;
+	
+	//~ Begin Common Grid Properties (Shared by Vision and Minimap)
 	UPROPERTY(Transient)
 	FVector2D GridSize = FVector2D::Zero();
 
-	/** The bottom-left corner of the grid in world space. Copied from AFogOfWar on initialization. */
 	UPROPERTY(Transient)
 	FVector2D GridBottomLeftWorldLocation = FVector2D::Zero();
+	//~ End Common Grid Properties
 
-	/** The calculated size of a single minimap tile in world units. */
+	//~ Begin Vision Grid Properties (High-Resolution for Fog of War calculation)
 	UPROPERTY(Transient)
-	FVector2D MinimapTileSize = FVector2D::Zero();
+	float Vision_TileSize = 0.0f;
 
-	/** The core data store for the minimap, representing a grid of tiles. */
+	UPROPERTY(Transient)
+	FIntPoint Vision_GridResolution = FIntPoint::ZeroValue;
+	//~ End Vision Grid Properties
+
+	//~ Begin Minimap Grid Properties (Low-Resolution for UI)
+    UPROPERTY(Transient)
+    FIntPoint Minimap_GridResolution = FIntPoint(256, 256);
+
+	UPROPERTY(Transient)
+	FVector2D Minimap_TileSize = FVector2D::Zero();
+
 	TArray<FMinimapTile> MinimapTiles;
+	//~ End Minimap Grid Properties
 
-	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
-	virtual void Deinitialize() override;
+public:
+	//~ Begin Static Vision Grid Conversion Functions
+	static FORCEINLINE FVector2f ConvertWorldSpaceLocationToVisionGridSpace_Static(const FVector2D& WorldLocation);
+	static FORCEINLINE FIntPoint ConvertVisionGridLocationToTileIJ_Static(const FVector2f& GridLocation);
+	static FORCEINLINE FIntPoint ConvertWorldLocationToVisionTileIJ_Static(const FVector2D& WorldLocation);
+	static FORCEINLINE FVector2D ConvertVisionTileIJToTileCenterWorldLocation_Static(const FIntPoint& IJ);
+	static FORCEINLINE int32 GetVisionGridGlobalIndex_Static(FIntPoint IJ);
+	static FORCEINLINE FIntPoint GetVisionGridTileIJ_Static(int32 GlobalIndex);
+	static FORCEINLINE bool IsVisionGridIJValid_Static(FIntPoint IJ);
+	//~ End Static Vision Grid Conversion Functions
 
-	/** Initializes the entire subsystem from the widget. This is the main entry point for setup. */
-	void InitializeFromWidget(class AFogOfWar* InFogOfWarActor, const FIntPoint& NewResolution);
-
-	/**
-	 * @brief Converts a world location to the corresponding minimap tile coordinate.
-	 * @param WorldLocation The 2D world location to convert.
-	 * @return The integer coordinate (X, Y) of the tile on the minimap grid.
-	 */
-	FORCEINLINE FIntPoint ConvertWorldLocationToMinimapTileIJ(const FVector2D& WorldLocation)
-	{
-		const FVector2f GridSpaceLocation = ConvertWorldSpaceLocationToMinimapGridSpace(WorldLocation);
-		return ConvertMinimapGridLocationToTileIJ(GridSpaceLocation);
-	}
-
-	/**
-	 * @brief Converts a minimap tile IJ coordinate to its corresponding world space 2D location (center of the tile).
-	 */
-	FORCEINLINE FVector2D ConvertMinimapTileIJToWorldLocation(const FIntPoint& TileIJ) const
-	{
-		return FVector2D(
-			GridBottomLeftWorldLocation.X + MinimapTileSize.X * TileIJ.X + MinimapTileSize.X / 2.0f,
-			GridBottomLeftWorldLocation.Y + MinimapTileSize.Y * TileIJ.Y + MinimapTileSize.Y / 2.0f
-		);
-	}
+	//~ Begin Static Minimap Grid Conversion Functions
+	static FORCEINLINE FIntPoint ConvertWorldLocationToMinimapTileIJ_Static(const FVector2D& WorldLocation);
+	static FORCEINLINE FVector2D ConvertMinimapTileIJToWorldLocation_Static(const FIntPoint& TileIJ);
+	//~ End Static Minimap Grid Conversion Functions
 
 private:
-	/**
-	 * @brief Converts a world space 2D location to a grid space 2D float coordinate.
-	 */
-	FORCEINLINE FVector2f ConvertWorldSpaceLocationToMinimapGridSpace(const FVector2D& WorldLocation)
-	{
-		// Ensure MinimapTileSize is not zero to avoid division by zero.
-		if (MinimapTileSize.X == 0.0f || MinimapTileSize.Y == 0.0f)
-		{
-			return FVector2f(-1.f, -1.f);
-		}
-		return FVector2f(
-			static_cast<float>((WorldLocation.X - GridBottomLeftWorldLocation.X) / MinimapTileSize.X),
-			static_cast<float>((WorldLocation.Y - GridBottomLeftWorldLocation.Y) / MinimapTileSize.Y)
-		);
-	}
+	// Private helpers for minimap conversions
+	static FORCEINLINE FVector2f ConvertWorldSpaceLocationToMinimapGridSpace_Static(const FVector2D& WorldLocation);
+	static FORCEINLINE FIntPoint ConvertMinimapGridLocationToTileIJ_Static(const FVector2f& GridLocation);
 
-	/**
-	 * @brief Converts a grid space 2D float coordinate to its corresponding tile IJ coordinate.
-	 */
-	FORCEINLINE FIntPoint ConvertMinimapGridLocationToTileIJ(const FVector2f& GridLocation)
-	{
-		return FIntPoint(
-			FMath::FloorToInt(GridLocation.X),
-			FMath::FloorToInt(GridLocation.Y)
-		);
-	}
+private:
+	/** Singleton instance, set on Initialize and cleared on Deinitialize. */
+	static UMinimapDataSubsystem* SingletonInstance;
 };
+
+//~ Begin Inline Implementations of Static Functions
+
+FORCEINLINE FVector2f UMinimapDataSubsystem::ConvertWorldSpaceLocationToVisionGridSpace_Static(const FVector2D& WorldLocation)
+{
+	check(SingletonInstance);
+	return FVector2f((WorldLocation - SingletonInstance->GridBottomLeftWorldLocation) / SingletonInstance->Vision_TileSize);
+}
+
+FORCEINLINE FIntPoint UMinimapDataSubsystem::ConvertVisionGridLocationToTileIJ_Static(const FVector2f& GridLocation)
+{
+	return FIntPoint(FMath::FloorToInt(GridLocation.X), FMath::FloorToInt(GridLocation.Y));
+}
+
+FORCEINLINE FIntPoint UMinimapDataSubsystem::ConvertWorldLocationToVisionTileIJ_Static(const FVector2D& WorldLocation)
+{
+	check(SingletonInstance);
+	const FVector2f GridLocation = FVector2f((WorldLocation - SingletonInstance->GridBottomLeftWorldLocation) / SingletonInstance->Vision_TileSize);
+	return FIntPoint(FMath::FloorToInt(GridLocation.X), FMath::FloorToInt(GridLocation.Y));
+}
+
+FORCEINLINE FVector2D UMinimapDataSubsystem::ConvertVisionTileIJToTileCenterWorldLocation_Static(const FIntPoint& IJ)
+{
+	check(SingletonInstance);
+	return SingletonInstance->GridBottomLeftWorldLocation + (FVector2D(IJ) + 0.5f) * SingletonInstance->Vision_TileSize;
+}
+
+FORCEINLINE int32 UMinimapDataSubsystem::GetVisionGridGlobalIndex_Static(FIntPoint IJ)
+{
+	check(SingletonInstance);
+	return IJ.X * SingletonInstance->Vision_GridResolution.Y + IJ.Y;
+}
+
+FORCEINLINE FIntPoint UMinimapDataSubsystem::GetVisionGridTileIJ_Static(int32 GlobalIndex)
+{
+	check(SingletonInstance);
+	return { GlobalIndex / SingletonInstance->Vision_GridResolution.Y, GlobalIndex % SingletonInstance->Vision_GridResolution.Y };
+}
+
+FORCEINLINE bool UMinimapDataSubsystem::IsVisionGridIJValid_Static(FIntPoint IJ)
+{
+	check(SingletonInstance);
+	return IJ.X >= 0 && IJ.Y >= 0 && IJ.X < SingletonInstance->Vision_GridResolution.X && IJ.Y < SingletonInstance->Vision_GridResolution.Y;
+}
+
+FORCEINLINE FIntPoint UMinimapDataSubsystem::ConvertWorldLocationToMinimapTileIJ_Static(const FVector2D& WorldLocation)
+{
+	check(SingletonInstance);
+	const FVector2f GridLocation = ConvertWorldSpaceLocationToMinimapGridSpace_Static(WorldLocation);
+	return ConvertMinimapGridLocationToTileIJ_Static(GridLocation);
+}
+
+FORCEINLINE FVector2D UMinimapDataSubsystem::ConvertMinimapTileIJToWorldLocation_Static(const FIntPoint& TileIJ)
+{
+	check(SingletonInstance);
+	return SingletonInstance->GridBottomLeftWorldLocation + (FVector2D(TileIJ) + 0.5f) * SingletonInstance->Minimap_TileSize;
+}
+
+FORCEINLINE FVector2f UMinimapDataSubsystem::ConvertWorldSpaceLocationToMinimapGridSpace_Static(const FVector2D& WorldLocation)
+{
+	check(SingletonInstance);
+	return FVector2f((WorldLocation - SingletonInstance->GridBottomLeftWorldLocation) / SingletonInstance->Minimap_TileSize);
+}
+
+FORCEINLINE FIntPoint UMinimapDataSubsystem::ConvertMinimapGridLocationToTileIJ_Static(const FVector2f& GridLocation)
+{
+	return FIntPoint(FMath::FloorToInt(GridLocation.X), FMath::FloorToInt(GridLocation.Y));
+}

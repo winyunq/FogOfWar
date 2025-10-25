@@ -10,6 +10,7 @@
 #include "MassRepresentationFragments.h" // For FMassVisibilityFragment
 #include "MassRepresentationProcessor.h" // For UMassVisibilityProcessor
 #include "MassLODFragments.h" // For LOD culling tags
+#include "Subsystems/MinimapDataSubsystem.h"
 #include "FogOfWar.generated.h"
 
 /// @file FogOfWar.h
@@ -251,7 +252,7 @@ public:
 	 * @param       TileIJ                         数据类型: FIntVector2
 	 * @details     瓦片的二维网格坐标。
 	 */
-	void CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ);
+	void CalculateTileHeight(FTile& Tile, FIntPoint TileIJ);
 
 	/**
 	 * @brief       创建一个用于存储当前帧可见性格子快照的2D纹理。
@@ -285,31 +286,16 @@ public:
 	//~ Begin Inline Helper Functions
 
 	/// @brief 将二维网格坐标转换为一维数组索引。
-	FORCEINLINE int GetGlobalIndex(FIntVector2 IJ) const { return IJ.X * GridResolution.Y + IJ.Y; }
+	FORCEINLINE int GetGlobalIndex(FIntPoint IJ) const { return IJ.X * GridResolution.Y + IJ.Y; }
 
 	/// @brief 将一维数组索引转换为二维网格坐标。
-	FORCEINLINE FIntVector2 GetTileIJ(int GlobalIndex) { return { GlobalIndex / GridResolution.Y, GlobalIndex % GridResolution.Y }; }
+	FORCEINLINE FIntPoint GetTileIJ(int GlobalIndex) const { return { GlobalIndex / GridResolution.Y, GlobalIndex % GridResolution.Y }; }
 
 	/// @brief 根据一维索引获取瓦片对象引用。
 	FORCEINLINE FTile& GetGlobalTile(int GlobalIndex) { return Tiles[GlobalIndex]; }
 
 	/// @brief 根据二维坐标获取瓦片对象引用。
-	FORCEINLINE FTile& GetGlobalTile(FIntVector2 IJ) { checkSlow(IsGlobalIJValid(IJ)); return GetGlobalTile(GetGlobalIndex(IJ)); }
-
-	/// @brief 检查二维坐标是否在网格范围内。
-	FORCEINLINE bool IsGlobalIJValid(FIntVector2 IJ) { return (IJ.X >= 0) & (IJ.Y >= 0) & (IJ.X < GridResolution.X) & (IJ.Y < GridResolution.Y); }
-
-	/// @brief 将世界空间的2D坐标转换为网格空间的2D浮点坐标。
-	FORCEINLINE FVector2f ConvertWorldSpaceLocationToGridSpace(const FVector2D& WorldLocation);
-
-	/// @brief 将瓦片IJ坐标转换为该瓦片中心点的世界空间2D坐标。
-	FORCEINLINE FVector2D ConvertTileIJToTileCenterWorldLocation(const FIntVector2& IJ);
-
-	/// @brief 将网格空间的2D浮点坐标转换为其所在的瓦片IJ坐标。
-	FORCEINLINE FIntVector2 ConvertGridLocationToTileIJ(const FVector2f& GridLocation);
-
-	/// @brief 将世界空间的2D坐标转换为其所在的瓦片IJ坐标。
-	FORCEINLINE FIntVector2 ConvertWorldLocationToTileIJ(const FVector2D& WorldLocation);
+	FORCEINLINE FTile& GetGlobalTile(FIntPoint IJ) { checkSlow(UMinimapDataSubsystem::IsVisionGridIJValid_Static(IJ)); return GetGlobalTile(GetGlobalIndex(IJ)); }
 
 	/// @brief 检查一个潜在的障碍物高度是否足以阻挡来自观察者的视线。
 	FORCEINLINE bool IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight);
@@ -338,7 +324,7 @@ public:
 
 	/// @brief 网格的分辨率（X和Y方向上的瓦片数量）。
 	UPROPERTY(VisibleInstanceOnly)
-	FIntVector2 GridResolution = {};
+	FIntPoint GridResolution = {};
 
 	/// @brief 网格左下角在世界空间中的2D坐标。作为所有坐标转换的基准。
 	UPROPERTY(VisibleInstanceOnly)

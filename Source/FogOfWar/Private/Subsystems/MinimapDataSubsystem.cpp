@@ -2,51 +2,60 @@
 
 #include "Subsystems/MinimapDataSubsystem.h"
 #include "FogOfWar.h"
-#include "Kismet/GameplayStatics.h"
+
+// Define the static singleton instance pointer.
+UMinimapDataSubsystem* UMinimapDataSubsystem::SingletonInstance = nullptr;
 
 void UMinimapDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-    Super::Initialize(Collection);
-    // The MinimapTiles array is now initialized in InitializeFromWidget,
-    // once the widget provides all necessary data.
+	Super::Initialize(Collection);
+	SingletonInstance = this;
+	bIsInitialized = false;
 }
 
 void UMinimapDataSubsystem::Deinitialize()
 {
-    MinimapTiles.Empty();
-    Super::Deinitialize();
+	SingletonInstance = nullptr;
+	Super::Deinitialize();
 }
 
-void UMinimapDataSubsystem::InitializeFromWidget(AFogOfWar* InFogOfWarActor, const FIntPoint& NewResolution)
+void UMinimapDataSubsystem::UpdateVisionGridParameters(AFogOfWar* InFogOfWarActor)
 {
-    // --- Step 1: Validate all inputs ---
-    if (!InFogOfWarActor)
-    {
-        return;
-    }
-    if (NewResolution.X <= 0 || NewResolution.Y <= 0)
-    {
-        return;
-    }
-    // Ensure the Fog of War actor itself is activated and has valid grid data.
-    if (!InFogOfWarActor->IsActivated() || InFogOfWarActor->GridSize.IsZero())
-    {
-        // This can happen if called too early. The caller (e.g., MinimapWidget) should ensure AFogOfWar is ready.
-        return;
-    }
+	if (!InFogOfWarActor || !InFogOfWarActor->IsActivated())
+	{
+		bIsInitialized = false;
+		return;
+	}
 
-    // --- Step 2: Set Resolution and allocate array ---
-    GridResolution = NewResolution;
-    MinimapTiles.SetNum(GridResolution.X * GridResolution.Y);
+	// Copy common properties
+	GridSize = InFogOfWarActor->GridSize;
+	GridBottomLeftWorldLocation = InFogOfWarActor->GridBottomLeftWorldLocation;
 
-    // --- Step 3: Set coordinate system properties ---
-    GridSize = InFogOfWarActor->GridSize;
-    GridBottomLeftWorldLocation = InFogOfWarActor->GridBottomLeftWorldLocation;
+	// Initialize Vision Grid properties
+	Vision_TileSize = InFogOfWarActor->GetTileSize();
+	Vision_GridResolution = InFogOfWarActor->GridResolution;
 
-    // --- Step 4: Calculate final derived data (tile size) ---
-    if (GridResolution.X > 0 && GridResolution.Y > 0)
-    {
-        MinimapTileSize.X = GridSize.X / GridResolution.X;
-        MinimapTileSize.Y = GridSize.Y / GridResolution.Y;
-    }
+	// If the minimap resolution has already been set, we can complete initialization
+	if (Minimap_GridResolution.X > 0 && Minimap_GridResolution.Y > 0 && GridSize.X > 0 && GridSize.Y > 0)
+	{
+		Minimap_TileSize = FVector2D(GridSize.X / Minimap_GridResolution.X, GridSize.Y / Minimap_GridResolution.Y);
+	}
+
+	// The system is ready once it has valid vision grid parameters
+	if (Vision_GridResolution.X > 0 && Vision_TileSize > 0.0f)
+	{
+		bIsInitialized = true;
+	}
+}
+
+void UMinimapDataSubsystem::SetMinimapResolution(const FIntPoint& NewResolution)
+{
+	Minimap_GridResolution = NewResolution;
+	MinimapTiles.SetNum(Minimap_GridResolution.X * Minimap_GridResolution.Y);
+
+	// If the main grid data is already available, calculate the minimap tile size now
+	if (bIsInitialized && GridSize.X > 0 && GridSize.Y > 0)
+	{
+		Minimap_TileSize = FVector2D(GridSize.X / Minimap_GridResolution.X, GridSize.Y / Minimap_GridResolution.Y);
+	}
 }

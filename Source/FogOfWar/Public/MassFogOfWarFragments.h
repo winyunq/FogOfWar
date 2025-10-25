@@ -50,7 +50,7 @@ struct FOGOFWAR_API FVisionUnitData
 
 	/// @brief 局部区域缓存网格左上角在全局网格中的坐标(IJ)。
 	UPROPERTY()
-	FIntVector2 LocalAreaCachedMinIJ = FIntVector2::ZeroValue;
+	FIntPoint LocalAreaCachedMinIJ = FIntPoint::ZeroValue;
 
 	/// @brief 局部区域内所有瓦片状态的缓存数组。
 	UPROPERTY()
@@ -67,19 +67,19 @@ struct FOGOFWAR_API FVisionUnitData
 	/// @brief 检查是否已有缓存数据。
 	FORCEINLINE bool HasCachedData() const { return bHasCachedData; }
 	/// @brief 根据局部二维坐标获取一维索引。
-	FORCEINLINE int GetLocalIndex(FIntVector2 IJ) const { return IJ.X * LocalAreaTilesResolution + IJ.Y; }
+	FORCEINLINE int GetLocalIndex(FIntPoint IJ) const { return IJ.X * LocalAreaTilesResolution + IJ.Y; }
 	/// @brief 根据局部一维索引获取二维坐标。
-	FORCEINLINE FIntVector2 GetLocalIJ(int LocalIndex) { return { LocalIndex / LocalAreaTilesResolution, LocalIndex % LocalAreaTilesResolution }; }
+	FORCEINLINE FIntPoint GetLocalIJ(int LocalIndex) const { return { LocalIndex / LocalAreaTilesResolution, LocalIndex % LocalAreaTilesResolution }; }
 	/// @brief 检查局部二维坐标是否有效。
-	FORCEINLINE bool IsLocalIJValid(FIntVector2 IJ) { return (IJ.X >= 0) & (IJ.Y >= 0) & (IJ.X < LocalAreaTilesResolution) & (IJ.Y < LocalAreaTilesResolution); }
+	FORCEINLINE bool IsLocalIJValid(FIntPoint IJ) const { return (IJ.X >= 0) & (IJ.Y >= 0) & (IJ.X < LocalAreaTilesResolution) & (IJ.Y < LocalAreaTilesResolution); }
 	/// @brief 根据局部一维索引获取瓦片状态。
 	FORCEINLINE ETileState& GetLocalTileState(int LocalIndex) { return LocalAreaTilesCachedStates[LocalIndex]; }
 	/// @brief 根据局部二维坐标获取瓦片状态。
-	FORCEINLINE ETileState& GetLocalTileState(FIntVector2 IJ) { checkSlow(IsLocalIJValid(IJ)); return GetLocalTileState(GetLocalIndex(IJ)); }
+	FORCEINLINE ETileState& GetLocalTileState(FIntPoint IJ) { checkSlow(IsLocalIJValid(IJ)); return GetLocalTileState(GetLocalIndex(IJ)); }
 	/// @brief 将局部二维坐标转换为全局二维坐标。
-	FORCEINLINE FIntVector2 LocalToGlobal(FIntVector2 LocalIJ) const { return LocalAreaCachedMinIJ + LocalIJ; }
+	FORCEINLINE FIntPoint LocalToGlobal(FIntPoint LocalIJ) const { return LocalAreaCachedMinIJ + LocalIJ; }
 	/// @brief 将全局二维坐标转换为局部二维坐标。
-	FORCEINLINE FIntVector2 GlobalToLocal(FIntVector2 GlobalIJ) const { return GlobalIJ - LocalAreaCachedMinIJ; }
+	FORCEINLINE FIntPoint GlobalToLocal(FIntPoint GlobalIJ) const { return GlobalIJ - LocalAreaCachedMinIJ; }
 };
 
 /**

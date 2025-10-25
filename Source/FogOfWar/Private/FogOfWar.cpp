@@ -5,12 +5,10 @@
 #include "Components/BrushComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Kismet/KismetRenderingLibrary.h"
+#include "Subsystems/MinimapDataSubsystem.h"
 #include "Utils/ManagerComponent.h"
 #include "Utils/ManagerStatics.h"
 #include "Utils/Macros.h"
-
-// Original FogOfWar.cpp includes VisionComponent.h, but it's obsolete now.
-// #include "VisionComponent.h" 
 
 DEFINE_LOG_CATEGORY(LogFogOfWar);
 
@@ -42,8 +40,8 @@ AFogOfWar::AFogOfWar()
 
 bool AFogOfWar::IsLocationVisible(FVector WorldLocation)
 {
-	FIntVector2 TileIJ = ConvertWorldLocationToTileIJ(FVector2D(WorldLocation));
-	if (!IsGlobalIJValid(TileIJ))
+	FIntPoint TileIJ = UMinimapDataSubsystem::ConvertWorldLocationToVisionTileIJ_Static(FVector2D(WorldLocation));
+	if (!UMinimapDataSubsystem::IsVisionGridIJValid_Static(TileIJ))
 	{
 		return false;
 	}
@@ -122,6 +120,12 @@ void AFogOfWar::Activate()
 	PostProcessingMID->SetScalarParameterValue(Names::FOW_NotVisibleRegionBrightness, NotVisibleRegionBrightness);
 
 	PostProcess->AddOrUpdateBlendable(PostProcessingMID);
+
+	// Register this actor with the MinimapDataSubsystem to provide it with grid parameters
+	if (UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get())
+	{
+		MinimapSubsystem->UpdateVisionGridParameters(this);
+	}
 
 	auto GameManager = UManagerStatics::GetGameManager(this);
 	GameManager->Register<ThisClass>(this);
@@ -208,10 +212,6 @@ void AFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEve
 		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, VisionBlockingDeltaHeightThreshold))
 		{
 			// This part is obsolete in Mass. The Mass processors will handle vision recalculation.
-			// for (auto& [key, value] : RegisteredVisions)
-			// {
-			// 	ResetCachedVisibilities(value);
-			// }
 			return;
 		}
 	}
@@ -235,23 +235,6 @@ void AFogOfWar::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	// The vision update loop is now handled by Mass processors.
-	// for (auto& [VisionComponent, VisionUnitData] : RegisteredVisions)
-	// {
-	// 	FVector3d OwnerActorLocation = VisionComponent->GetOwner()->GetActorLocation();
-	// 	FIntVector2 GridIJ = ConvertWorldLocationToTileIJ(FVector2D(OwnerActorLocation));
-	// 	int GridIndex = GetGlobalIndex(GridIJ);
-
-	// #if WITH_EDITORONLY_DATA
-	// 	if (!bDebugStressTestIgnoreCache)
-	// #endif
-	// 		if (VisionUnitData.HasCachedData() && VisionUnitData.CachedOriginGlobalIndex == GridIndex)
-	// 		{
-	// 			// the actor didn't change the tile. skipping...
-	// 			continue;
-	// 		}
-
-	// 	UpdateVisibilities(OwnerActorLocation, VisionUnitData);
-	// }
 
 	{
 		DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline"), STAT_FogOfWarPipeline, STATGROUP_FogOfWar);
@@ -310,9 +293,9 @@ void AFogOfWar::Initialize()
 	};
 }
 
-void AFogOfWar::CalculateTileHeight(FTile& Tile, FIntVector2 TileIJ)
+void AFogOfWar::CalculateTileHeight(FTile& Tile, FIntPoint TileIJ)
 {
-	FVector2D WorldLocation = ConvertTileIJToTileCenterWorldLocation(TileIJ);
+	FVector2D WorldLocation = UMinimapDataSubsystem::ConvertVisionTileIJToTileCenterWorldLocation_Static(TileIJ);
 	FHitResult HitResult;
 	bool bFoundBlockingHit = GetWorld()->LineTraceSingleByChannel(
 		HitResult,
@@ -361,6 +344,21 @@ UTextureRenderTarget2D* AFogOfWar::CreateRenderTarget()
 	return RenderTarget;
 }
 
+void AFogOfWar::WriteVisionDataToTexture(UTexture2D* Texture)
+{
+	for (int TileIndex = 0; TileIndex < Tiles.Num(); TileIndex++)
+	{
+		const FTile& Tile = Tiles[TileIndex];
+		TextureDataBuffer[TileIndex] = Tile.VisibilityCounter > 0 ? 0xFF : 0;
+	}
+
+	void* TextureData = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+	FMemory::Memcpy(TextureData, TextureDataBuffer.GetData(), sizeof(TextureDataBuffer[0]) * TextureDataBuffer.Num());
+	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+	// TODO: likely a better version exists
+	Texture->UpdateResource();
+}
+
 #if WITH_EDITORONLY_DATA
 void AFogOfWar::WriteHeightmapDataToTexture(UTexture2D* Texture)
 {
@@ -380,51 +378,6 @@ void AFogOfWar::WriteHeightmapDataToTexture(UTexture2D* Texture)
 	Texture->UpdateResource();
 }
 #endif
-
-void AFogOfWar::WriteVisionDataToTexture(UTexture2D* Texture)
-{
-	for (int TileIndex = 0; TileIndex < Tiles.Num(); TileIndex++)
-	{
-		const FTile& Tile = Tiles[TileIndex];
-		TextureDataBuffer[TileIndex] = Tile.VisibilityCounter > 0 ? 0xFF : 0;
-	}
-
-	void* TextureData = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
-	FMemory::Memcpy(TextureData, TextureDataBuffer.GetData(), sizeof(TextureDataBuffer[0]) * TextureDataBuffer.Num());
-	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
-	// TODO: likely a better version exists
-	Texture->UpdateResource();
-}
-
-FVector2f AFogOfWar::ConvertWorldSpaceLocationToGridSpace(const FVector2D& WorldLocation)
-{
-	return {
-		static_cast<float>((WorldLocation.X - GridBottomLeftWorldLocation.X) / TileSize),
-		static_cast<float>((WorldLocation.Y - GridBottomLeftWorldLocation.Y) / TileSize)
-	};
-}
-
-FVector2D AFogOfWar::ConvertTileIJToTileCenterWorldLocation(const FIntVector2& IJ)
-{
-	return {
-		GridBottomLeftWorldLocation.X + TileSize * IJ.X + TileSize / 2,
-		GridBottomLeftWorldLocation.Y + TileSize * IJ.Y + TileSize / 2
-	};
-}
-
-FIntVector2 AFogOfWar::ConvertGridLocationToTileIJ(const FVector2f& GridLocation)
-{
-	return {
-		FMath::FloorToInt(GridLocation.X),
-		FMath::FloorToInt(GridLocation.Y)
-	};
-}
-
-FIntVector2 AFogOfWar::ConvertWorldLocationToTileIJ(const FVector2D& WorldLocation)
-{
-	FVector2f GridSpaceLocation = ConvertWorldSpaceLocationToGridSpace(WorldLocation);
-	return ConvertGridLocationToTileIJ(GridSpaceLocation);
-}
 
 bool AFogOfWar::IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight)
 {

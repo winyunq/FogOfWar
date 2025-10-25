@@ -130,6 +130,12 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<class URTSCamera> RTSCameraComponent;
 
+	/** Query for counting entities with a minimap representation. Configured once on initialization. */
+	FMassEntityQuery CountQuery;
+
+	/** Query for drawing entities directly to the minimap. Configured once on initialization. */
+	FMassEntityQuery DrawQuery;
+
 	// Tick更新频率控制器
 	float TimeSinceLastUpdate = 0.0f;
 

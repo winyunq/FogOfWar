@@ -4,6 +4,7 @@
 #include "MassFogOfWarFragments.h"
 #include "MassCommonFragments.h"
 #include "FogOfWar.h"
+#include "Subsystems/MinimapDataSubsystem.h"
 #include "MassExecutionContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "Containers/StringView.h"
@@ -15,6 +16,9 @@
 //----------------------------------------------------------------------//
 void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AFogOfWar* FogOfWar)
 {
+	// Subsystem is now accessed via its static Get() method.
+	const float VisionTileSize = UMinimapDataSubsystem::Get()->Vision_TileSize;
+	
 	const TConstArrayView<FTransformFragment> TransformList = Context.GetFragmentView<FTransformFragment>();
 	const TConstArrayView<FMassVisionFragment> VisionList = Context.GetFragmentView<FMassVisionFragment>();
 	const TArrayView<FMassPreviousVisionFragment> PreviousVisionList = Context.GetMutableFragmentView<FMassPreviousVisionFragment>();
@@ -34,8 +38,8 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 				{
 					if (PreviousVisionFragment.PreviousVisionData.GetLocalTileState({ I, J }) == ETileState::Visible)
 					{
-						FIntVector2 GlobalIJ = PreviousVisionFragment.PreviousVisionData.LocalToGlobal({ I, J });
-						if (FogOfWar->IsGlobalIJValid(GlobalIJ))
+						const FIntPoint GlobalIJ = PreviousVisionFragment.PreviousVisionData.LocalToGlobal({ I, J });
+						if (UMinimapDataSubsystem::IsVisionGridIJValid_Static(GlobalIJ))
 						{
 							FTile& GlobalTile = FogOfWar->GetGlobalTile(GlobalIJ);
 							checkSlow(GlobalTile.VisibilityCounter > 0);
@@ -48,27 +52,29 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 		}
 
 		// Create current VisionUnitData
-		int LocalAreaTilesResolution = FMath::CeilToInt32(SightRadius * 2 / FogOfWar->GetTileSize()) + 1;
+		int LocalAreaTilesResolution = FMath::CeilToInt32(SightRadius * 2 / VisionTileSize) + 1;
 		TArray<ETileState> LocalAreaTilesStates;
 		LocalAreaTilesStates.Init(ETileState::NotVisible, LocalAreaTilesResolution * LocalAreaTilesResolution);
 		
 		FVisionUnitData VisionUnitData = {
 			.LocalAreaTilesResolution = LocalAreaTilesResolution,
-			.GridSpaceRadius = SightRadius / FogOfWar->GetTileSize(),
+			.GridSpaceRadius = SightRadius / VisionTileSize,
 			.LocalAreaTilesCachedStates = MoveTemp(LocalAreaTilesStates),
 		};
 
-		const FVector2f OriginGridLocation = FogOfWar->ConvertWorldSpaceLocationToGridSpace(FVector2D(Location));
+		const FVector2f OriginGridLocation = UMinimapDataSubsystem::ConvertWorldSpaceLocationToVisionGridSpace_Static(FVector2D(Location));
+		const FIntPoint OriginGridLocationRounded = UMinimapDataSubsystem::ConvertVisionGridLocationToTileIJ_Static(OriginGridLocation + VisionUnitData.GridSpaceRadius);
+		const FIntPoint OriginGridLocationRounded2 = UMinimapDataSubsystem::ConvertVisionGridLocationToTileIJ_Static(OriginGridLocation - VisionUnitData.GridSpaceRadius);
 
-		checkSlow(FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation + VisionUnitData.GridSpaceRadius).X - FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation - VisionUnitData.GridSpaceRadius).X + 1 <= VisionUnitData.LocalAreaTilesResolution);
-		checkSlow(FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation + VisionUnitData.GridSpaceRadius).Y - FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation - VisionUnitData.GridSpaceRadius).Y + 1 <= VisionUnitData.LocalAreaTilesResolution);
-		checkSlow(FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation + VisionUnitData.GridSpaceRadius).X - FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation - VisionUnitData.GridSpaceRadius).X + 1 + 2 > VisionUnitData.LocalAreaTilesResolution);
-		checkSlow(FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation + VisionUnitData.GridSpaceRadius).Y - FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation - VisionUnitData.GridSpaceRadius).Y + 1 + 2 > VisionUnitData.LocalAreaTilesResolution);
+		checkSlow(OriginGridLocationRounded.X - OriginGridLocationRounded2.X + 1 <= VisionUnitData.LocalAreaTilesResolution);
+		checkSlow(OriginGridLocationRounded.Y - OriginGridLocationRounded2.Y + 1 <= VisionUnitData.LocalAreaTilesResolution);
+		checkSlow(OriginGridLocationRounded.X - OriginGridLocationRounded2.X + 1 + 2 > VisionUnitData.LocalAreaTilesResolution);
+		checkSlow(OriginGridLocationRounded.Y - OriginGridLocationRounded2.Y + 1 + 2 > VisionUnitData.LocalAreaTilesResolution);
 
 		VisionUnitData.LocalAreaTilesCachedStates.Init(ETileState::Unknown, VisionUnitData.LocalAreaTilesCachedStates.Num());
-		const FIntVector2 OriginGlobalIJ = FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation);
+		const FIntPoint OriginGlobalIJ = UMinimapDataSubsystem::ConvertVisionGridLocationToTileIJ_Static(OriginGridLocation);
 		
-		        if (!FogOfWar->IsGlobalIJValid(OriginGlobalIJ))
+		if (!UMinimapDataSubsystem::IsVisionGridIJValid_Static(OriginGlobalIJ))
 		{
 			UE_LOG(LogFogOfWar, Verbose, TEXT("Vision actor is outside the grid. Skipping."));
 			PreviousVisionFragment.PreviousVisionData = MoveTemp(VisionUnitData);
@@ -81,15 +87,13 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 			return;
 		}
 
-		VisionUnitData.CachedOriginGlobalIndex = FogOfWar->GetGlobalIndex(OriginGlobalIJ);
-		VisionUnitData.LocalAreaCachedMinIJ = FogOfWar->ConvertGridLocationToTileIJ(OriginGridLocation - VisionUnitData.GridSpaceRadius);
-		const FIntVector2 OriginLocalIJ = VisionUnitData.GlobalToLocal(OriginGlobalIJ);
+		VisionUnitData.CachedOriginGlobalIndex = UMinimapDataSubsystem::GetVisionGridGlobalIndex_Static(OriginGlobalIJ);
+		VisionUnitData.LocalAreaCachedMinIJ = UMinimapDataSubsystem::ConvertVisionGridLocationToTileIJ_Static(OriginGridLocation - VisionUnitData.GridSpaceRadius);
+		const FIntPoint OriginLocalIJ = VisionUnitData.GlobalToLocal(OriginGlobalIJ);
 
 		VisionUnitData.GetLocalTileState(OriginLocalIJ) = ETileState::Visible;
 
 		const float GridSpaceRadiusSqr = FMath::Square(VisionUnitData.GridSpaceRadius);
-
-		TArray<int> DDALocalIndexesStack;
 
 		// going in spiral
 		{
@@ -100,13 +104,13 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 #endif
 
 			enum class EDirection { Right, Up, Left, Down };
-			const FIntVector2 DirectionDeltas[] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0} };
+			const FIntPoint DirectionDeltas[] = { {0, 1}, {1, 0}, {0, -1}, {-1, 0} };
 
 			EDirection CurrentDirection = EDirection::Right;
 			bool Clock = true;
 			int CurrentStepSize = VisionUnitData.LocalAreaTilesResolution;
 			int LeftToSpend = CurrentStepSize;
-			FIntVector2 CurrentLocalIJ = FIntVector2(0, 0) - DirectionDeltas[static_cast<int>(CurrentDirection)];
+			FIntPoint CurrentLocalIJ = FIntPoint(0, 0) - DirectionDeltas[static_cast<int>(CurrentDirection)];
 
 			while (true)
 			{
@@ -122,9 +126,9 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 						IsTileVisited[VisionUnitData.GetLocalIndex(CurrentLocalIJ)] = true;
 #endif
 
-					FIntVector2 GlobalIJ = VisionUnitData.LocalToGlobal(CurrentLocalIJ);
+					const FIntPoint GlobalIJ = VisionUnitData.LocalToGlobal(CurrentLocalIJ);
 
-					if (FogOfWar->IsGlobalIJValid(GlobalIJ))
+					if (UMinimapDataSubsystem::IsVisionGridIJValid_Static(GlobalIJ))
 					{
 						int DistToTileSqr = FMath::Square(OriginGlobalIJ.X - GlobalIJ.X) + FMath::Square(OriginGlobalIJ.Y - GlobalIJ.Y);
 						if (DistToTileSqr <= GridSpaceRadiusSqr)
@@ -133,9 +137,9 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 							int LocalIndex = VisionUnitData.GetLocalIndex(CurrentLocalIJ);
 							if (VisionUnitData.GetLocalTileState(LocalIndex) == ETileState::Unknown)
 							{
-								const FIntVector2 Direction = OriginLocalIJ - CurrentLocalIJ;
+								const FIntPoint Direction = OriginLocalIJ - CurrentLocalIJ;
 								checkSlow(FMath::Abs(Direction.X) + FMath::Abs(Direction.Y) != 0);
-								const FIntVector2 DirectionSign = { Direction.X >= 0 ? 1 : -1, Direction.Y >= 0 ? 1 : -1 };
+								const FIntPoint DirectionSign = { Direction.X >= 0 ? 1 : -1, Direction.Y >= 0 ? 1 : -1 };
 								const float S_x = FMath::Sqrt(FMath::Square(1.0) + FMath::Square(static_cast<float>(Direction.Y) / Direction.X));
 								const float S_y = FMath::Sqrt(FMath::Square(1.0) + FMath::Square(static_cast<float>(Direction.X) / Direction.Y));
 								float NextAccumulatedDxLength = 0.5 * S_x;
@@ -146,7 +150,7 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 								checkSlow(DDASafetyIterations < 10000);
 								int DDASafetyCounter;
 
-								FIntVector2 CurrentDDALocalIJ = CurrentLocalIJ;
+								FIntPoint CurrentDDALocalIJ = CurrentLocalIJ;
 								int CurrentDDALocalIndex = LocalIndex;
 
 								for (DDASafetyCounter = 0; DDASafetyCounter < DDASafetyIterations; DDASafetyCounter++)
@@ -172,7 +176,7 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 										CurrentDDALocalIJ.Y += DirectionSign.Y;
 									}
 									checkSlow(VisionUnitData.IsLocalIJValid(CurrentDDALocalIJ));
-									checkSlow(FogOfWar->IsGlobalIJValid(VisionUnitData.LocalToGlobal(CurrentDDALocalIJ)));
+									checkSlow(UMinimapDataSubsystem::IsVisionGridIJValid_Static(VisionUnitData.LocalToGlobal(CurrentDDALocalIJ)));
 									CurrentDDALocalIndex = VisionUnitData.GetLocalIndex(CurrentDDALocalIJ);
 								}
 								checkSlow(DDASafetyCounter < DDASafetyIterations);
@@ -223,8 +227,8 @@ void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AF
 		{
 			for (int J = 0; J < VisionUnitData.LocalAreaTilesResolution; J++)
 			{
-				FIntVector2 GlobalIJ = VisionUnitData.LocalToGlobal({ I, J });
-				if (FogOfWar->IsGlobalIJValid(GlobalIJ))
+				const FIntPoint GlobalIJ = VisionUnitData.LocalToGlobal({ I, J });
+				if (UMinimapDataSubsystem::IsVisionGridIJValid_Static(GlobalIJ))
 				{
 					int DistToTileSqr = FMath::Square(OriginGlobalIJ.X - GlobalIJ.X) + FMath::Square(OriginGlobalIJ.Y - GlobalIJ.Y);
 					if (DistToTileSqr <= GridSpaceRadiusSqr)
@@ -264,26 +268,23 @@ void UInitialVisionProcessor::ConfigureQueries(const TSharedRef<FMassEntityManag
 
 void UInitialVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	//if (!FogOfWarActor.Get())
-	//{
-	//	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	//}
-	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
-	//{
-	//	return;
-	//}
+	/*if (!FogOfWarActor.Get())
+	{
+		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	}
+	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated() || !UMinimapDataSubsystem::Get() || !UMinimapDataSubsystem::Get()->bIsInitialized)
+	{
+		return;
+	}
 
-	//EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
-	//{
-	//	FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
-
-	//	// Add initialized tag to all entities in the chunk
-	//	const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
-	//	for (const FMassEntityHandle& Entity : Entities)
-	//	{
-	//		Context.Defer().AddTag<FMassVisionInitializedTag>(Entity);
-	//	}
-	//});
+	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
+	{
+		const auto& Entities = Context.GetEntities();
+		for (const FMassEntityHandle& Entity : Entities)
+		{
+			Context.Defer().AddTag<FMassVisionInitializedTag>(Entity);
+		}
+	});*/
 }
 
 
@@ -297,7 +298,6 @@ UVisionProcessor::UVisionProcessor()
 	bAutoRegisterWithProcessingPhases = true;
 	ExecutionFlags = (int32)EProcessorExecutionFlags::All;
 	ExecutionOrder.ExecuteAfter.Add(UInitialVisionProcessor::StaticClass()->GetFName()); // Ensure initial vision runs first
-	// ExecutionOrder.ExecuteAfter.Add(UMassVisibilityProcessor::StaticClass()->GetFName()); // Ensure vision update runs after visibility processor
 }
 
 void UVisionProcessor::ConfigureQueries(const TSharedRef<FMassEntityManager>& EntityManager)
@@ -320,7 +320,7 @@ void UVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 	//{
 	//	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
 	//}
-	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
+	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated() || !UMinimapDataSubsystem::Get() || !UMinimapDataSubsystem::Get()->bIsInitialized)
 	//{
 	//	return;
 	//}
@@ -330,7 +330,7 @@ void UVisionProcessor::Execute(FMassEntityManager& EntityManager, FMassExecution
 	//	FFogOfWarMassHelpers::ProcessEntityChunk(Context, FogOfWarActor.Get());
 
 	//	// Remove location changed tag from all entities in the chunk
-	//	const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
+	//	const auto& Entities = Context.GetEntities();
 	//	for (const FMassEntityHandle& Entity : Entities)
 	//	{
 	//		Context.Defer().RemoveTag<FMassLocationChangedTag>(Entity);
@@ -354,43 +354,41 @@ void UDebugStressTestProcessor::ConfigureQueries(const TSharedRef<FMassEntityMan
 {
 	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddTagRequirement<FMassVisionEntityTag>(EMassFragmentPresence::All);
-	// 我们需要查询所有可见单位，无论它们是否已改变位置
-	// EntityQuery.AddConstSharedRequirement<FMassVisibilityFragment>(EMassFragmentPresence::All);
 }
 
 void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	//if (!FogOfWarActor.Get())
-	//{
-	//	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	//}
-	//if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
-	//{
-	//	return;
-	//}
+	/*if (!FogOfWarActor.Get())
+	{
+		FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
+	}
+	if (!FogOfWarActor.Get() || !FogOfWarActor->IsActivated())
+	{
+		return;
+	}
 
-	//const bool bForceVisionUpdate = FogOfWarActor->bDebugStressTestIgnoreCache;
-	//const bool bForceMinimapUpdate = FogOfWarActor->bDebugStressTestMinimap;
+	const bool bForceVisionUpdate = FogOfWarActor->bDebugStressTestIgnoreCache;
+	const bool bForceMinimapUpdate = FogOfWarActor->bDebugStressTestMinimap;
 
-	//if (!bForceVisionUpdate && !bForceMinimapUpdate)
-	//{
-	//	return;
-	//}
+	if (!bForceVisionUpdate && !bForceMinimapUpdate)
+	{
+		return;
+	}
 
-	//EntityQuery.ForEachEntityChunk(Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
-	//{
-	//	const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
-	//	for (const FMassEntityHandle& Entity : Entities)
-	//	{
-	//		if (bForceVisionUpdate)
-	//		{
-	//			Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
-	//		}
-	//		if (bForceMinimapUpdate)
-	//		{
-	//			Context.Defer().AddTag<FMinimapCellChangedTag>(Entity);
-	//		}
-	//	}
-	//});
+	EntityQuery.ForEachEntityChunk(Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
+	{
+		const auto& Entities = Context.GetEntities();
+		for (const FMassEntityHandle& Entity : Entities)
+		{
+			if (bForceVisionUpdate)
+			{
+				Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
+			}
+			if (bForceMinimapUpdate)
+			{
+				Context.Defer().AddTag<FMinimapCellChangedTag>(Entity);
+			}
+		}
+	});*/
 }
 

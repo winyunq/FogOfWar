@@ -22,11 +22,8 @@ void UMinimapCellObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>
 
 void UMinimapCellObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	if (!MinimapDataSubsystem)
-	{
-		MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
-	}
-	if (!MinimapDataSubsystem)
+	MinimapDataSubsystem = UMinimapDataSubsystem::Get();
+	if (!MinimapDataSubsystem || !MinimapDataSubsystem->bIsInitialized)
 	{
 		return;
 	}
@@ -41,7 +38,7 @@ void UMinimapCellObserver::Execute(FMassEntityManager& EntityManager, FMassExecu
 			const FVector& WorldLocation = LocationList[i].GetTransform().GetLocation();
 			const FIntPoint& PrevCellCoords = PrevCellList[i].PrevCellCoords;
 
-			const FIntPoint CurrentMinimapTileIJ = MinimapDataSubsystem->ConvertWorldLocationToMinimapTileIJ(FVector2D(WorldLocation));
+			const FIntPoint CurrentMinimapTileIJ = UMinimapDataSubsystem::ConvertWorldLocationToMinimapTileIJ_Static(FVector2D(WorldLocation));
 
 			if (CurrentMinimapTileIJ != PrevCellCoords)
 			{

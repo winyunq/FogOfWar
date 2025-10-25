@@ -46,7 +46,7 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 	// Now that we have a valid FogOfWarActor, initialize the subsystem that depends on it.
 	if (MinimapDataSubsystem)
 	{
-		MinimapDataSubsystem->InitializeFromWidget(FogOfWarActor, TextureResolution);
+		MinimapDataSubsystem->SetMinimapResolution(TextureResolution);
 	}
 
 	if (!MinimapRenderTarget)
@@ -87,6 +87,21 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(FogOfWarActor->GridBottomLeftWorldLocation.X, FogOfWarActor->GridBottomLeftWorldLocation.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(FogOfWarActor->GridSize.X, FogOfWarActor->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(FogOfWarActor->GridSize.X/TextureResolution.X, FogOfWarActor->GridSize.Y/TextureResolution.Y, 0));
+
+	// Configure Mass Queries once.
+	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
+	if (EntitySubsystem)
+	{
+		FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+		CountQuery = FMassEntityQuery(EntityManager.AsShared());
+		CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+
+		DrawQuery = FMassEntityQuery(EntityManager.AsShared());
+		DrawQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
+		DrawQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+		DrawQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
+	}
+	
 	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar."));
 
 	APlayerController* PlayerController = GetOwningPlayer();
@@ -239,7 +254,7 @@ void UMinimapWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
-	MinimapDataSubsystem = GetWorld()->GetSubsystem<UMinimapDataSubsystem>();
+	MinimapDataSubsystem = UMinimapDataSubsystem::Get();
 
 	if (MinimapButton)
 	{
@@ -255,17 +270,8 @@ void UMinimapWidget::UpdateMinimapTexture()
 		return;
 	}
 
-	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
-	if (!EntitySubsystem)
-	{
-		return;
-	}
-
 	// Decide which drawing path to take based on the number of units.
-	// In UE 5.6, FMassEntityQuery must be initialized with an FMassEntityManager.
-	FMassEntityQuery CountQuery(EntitySubsystem->GetMutableEntityManager().AsShared());
-	CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-	const int32 TotalUnitCount = CountQuery.GetNumMatchingEntities();
+	const int32 TotalUnitCount = CountQuery.IsInitialized() ? CountQuery.GetNumMatchingEntities() : 0;
 
 	if (TotalUnitCount <= DirectQueryThreshold)
 	{
@@ -298,18 +304,17 @@ void UMinimapWidget::DrawInLessSize()
 	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
 	// --- 2. Define and Execute Query for All Minimap Entities ---
-	// In UE 5.6, FMassEntityQuery must be initialized with an FMassEntityManager.
-	FMassEntityQuery EntityQuery(EntityManager.AsShared());
-	EntityQuery.AddRequirement<FTransformFragment>(EMassFragmentAccess::ReadOnly);
-	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
-	EntityQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
-
 	int32 UnitCount = 0;
 	int32 VisionSourceCount = 0;
 
+	if (!DrawQuery.IsInitialized())
+	{
+		return;
+	}
+
 	// The FMassExecutionContext is now created via the EntityManager and passed to the query.
 	FMassExecutionContext Context = EntityManager.CreateExecutionContext(0.f);
-	EntityQuery.ForEachEntityChunk(Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
+	DrawQuery.ForEachEntityChunk(Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FTransformFragment> LocationList = Context.GetFragmentView<FTransformFragment>();
 		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
@@ -373,7 +378,7 @@ void UMinimapWidget::DrawInMassSize()
 	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
 	// --- 2. Read from Tile Cache and Write to Pointers ---
-	const FIntPoint GridResolution = MinimapDataSubsystem->GridResolution;
+	const FIntPoint GridResolution = MinimapDataSubsystem->Minimap_GridResolution;
 	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
 	int32 UnitCount = 0;
 	int32 VisionSourceCount = 0;
@@ -385,8 +390,8 @@ void UMinimapWidget::DrawInMassSize()
 		const FMinimapTile& Tile = Tiles[i];
 		if (Tile.UnitCount > 0)
 		{
-			const FIntVector2 TileIJ(i / GridResolution.Y, i % GridResolution.Y);
-			const FVector2D WorldLocation = MinimapDataSubsystem->ConvertMinimapTileIJToWorldLocation(FIntPoint(TileIJ.X, TileIJ.Y));
+			const FIntPoint TileIJ(i / GridResolution.Y, i % GridResolution.Y);
+			const FVector2D WorldLocation = UMinimapDataSubsystem::ConvertMinimapTileIJToWorldLocation_Static(TileIJ);
 
 			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, Tile.MaxIconSize, 1.0f);
 			IconColorPtr[UnitCount] = Tile.Color;
