@@ -353,7 +353,7 @@ FReply URTSMinimapControllerWidget::NativeOnMouseButtonDown(const FGeometry& InG
 		
 		if (CachedRTSCamera)
 		{
-			CachedRTSCamera->JumpTo(FVector(WorldPos, 0.0f)); // Z is ignored by JumpTo usually (or handled by camera height)
+			CachedRTSCamera->jumpTo(FVector(WorldPos, 0.0f)); // Z is ignored by JumpTo usually (or handled by camera height)
 		}
 		
 		return FReply::Handled().CaptureMouse(TakeWidget());
@@ -380,7 +380,7 @@ FReply URTSMinimapControllerWidget::NativeOnMouseMove(const FGeometry& InGeometr
 		
 		if (CachedRTSCamera)
 		{
-			CachedRTSCamera->JumpTo(FVector(WorldPos, 0.0f));
+			CachedRTSCamera->jumpTo(FVector(WorldPos, 0.0f));
 		}
 		return FReply::Handled();
 	}
