@@ -34,6 +34,16 @@ public class FogOfWar : ModuleRules
 				"MassLOD", // Required for LOD-based culling tags
 				"OpenRTSCamera", // Added for RTS camera integration
 				"EnhancedInput", // Required because RTSCamera.h includes InputMappingContext.h
+				"MassCommon", // For Mass types
+				"MassEntity", 
+				"MassMovement", 
+				"MassSpawner", 
+				"MassRepresentation", 
+				"MassSignals", 
+				"MassLOD", 
+				"MassBattle", // Direct Dependency
+				"OpenRTSCamera", 
+				"EnhancedInput", 
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);

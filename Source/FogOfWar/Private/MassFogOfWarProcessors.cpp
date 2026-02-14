@@ -17,7 +17,7 @@
 void FFogOfWarMassHelpers::ProcessEntityChunk(FMassExecutionContext& Context, AFogOfWar* FogOfWar)
 {
 	// Subsystem is now accessed via its static Get() method.
-	const float VisionTileSize = UMinimapDataSubsystem::Get()->Vision_TileSize;
+	const float VisionTileSize = UMinimapDataSubsystem::Get()->VisionTileSize;
 	
 	const TConstArrayView<FTransformFragment> TransformList = Context.GetFragmentView<FTransformFragment>();
 	const TConstArrayView<FMassVisionFragment> VisionList = Context.GetFragmentView<FMassVisionFragment>();

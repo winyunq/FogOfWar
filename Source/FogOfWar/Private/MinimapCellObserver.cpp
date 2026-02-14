@@ -23,7 +23,7 @@ void UMinimapCellObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>
 void UMinimapCellObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
 	MinimapDataSubsystem = UMinimapDataSubsystem::Get();
-	if (!MinimapDataSubsystem || !MinimapDataSubsystem->bIsInitialized)
+	if (!MinimapDataSubsystem)
 	{
 		return;
 	}

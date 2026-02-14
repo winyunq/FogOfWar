@@ -5,12 +5,10 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "MassEntityTypes.h"
-#include "RTSCamera.h"
-#include "Components/Button.h" // Added for UButton
+#include "Components/Image.h"
 #include "MinimapWidget.generated.h"
 
 class UImage;
-class UButton; // Forward declaration for UButton
 class UTextureRenderTarget2D;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
@@ -26,15 +24,15 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapDrag, const FVector&, Worl
  * 高度自动化、易于使用的小地图控件。
  * 自动从主战争迷雾Actor同步坐标系，自动绑定UI中的Image控件，并提供清晰的点击、拖动、释放事件回调。
  */
-UCLASS()
+UCLASS(Config=MassBattle)
 class FOGOFWAR_API UMinimapWidget : public UUserWidget
 {
 	GENERATED_BODY()
 
 public:
-	/** 从场景中的AFogOfWar Actor自动初始化坐标系和边界 */
+	/** 初始化小地图系统。尝试同步 FogOfWar Actor，如果不存在则使用 Subsystem 配置。 */
 	UFUNCTION(BlueprintCallable, Category = "Minimap")
-	bool InitializeFromWorldFogOfWar();
+	bool InitializeMinimapSystem();
 
 	/** 将小地图上的UV坐标转换为世界坐标 */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Minimap")
@@ -44,30 +42,12 @@ protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
-	// 重写鼠标事件以捕获点击和拖动
-	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
-	virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
-	virtual FReply NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
-
 	// 核心更新函数
 	void UpdateMinimapTexture();
 
 	// 根据单位数量选择不同的绘制路径
 	void DrawInMassSize();  // 大于阈值时，使用缓存绘制
 	void DrawInLessSize();  // 小于等于阈值时，直接查询绘制
-
-	UFUNCTION() void OnMinimapButtonPressed(); // Added for UButton
-	UFUNCTION() void OnMinimapButtonReleased(); // Added for UButton
-
-	// 将相机移动到小地图上的鼠标点击/悬停位置
-	void JumpToLocationUnderMouse();
-
-public:
-	// --- 事件回调 (Event Callbacks) ---
-
-	/** 当鼠标在小地图上拖动时广播。返回拖动的世界坐标增量。*/
-	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
-	FOnMinimapDrag OnMinimapDragged;
 
 protected:
 	// --- 蓝图可配置属性 (Config) ---
@@ -77,7 +57,7 @@ protected:
 	TObjectPtr<UMaterialInterface> MinimapMaterial;
 
 	/** 小地图纹理的分辨率 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance")
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance")
 	FIntPoint TextureResolution = FIntPoint(256, 256);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (ClampMin = "0"))
@@ -94,10 +74,6 @@ protected:
 	/** 【自动绑定】请在UMG编辑器中，将您的Image控件命名为'MinimapImage' */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UImage> MinimapImage;
-
-	/** 【自动绑定】请在UMG编辑器中，将您的Button控件命名为'MinimapButton'，并放置在MinimapImage上方 */
-	UPROPERTY(meta = (BindWidget))
-	TObjectPtr<UButton> MinimapButton; // Added for UButton
 
 	/** 渲染目标（RT）*/
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Minimap|Internal")
@@ -123,13 +99,6 @@ protected:
 	UPROPERTY(Transient)
 	TObjectPtr<UMinimapDataSubsystem> MinimapDataSubsystem;
 
-	/** 指向主战争迷雾Actor的指针 */
-	UPROPERTY(Transient)
-	TObjectPtr<AFogOfWar> FogOfWarActor;
-
-	UPROPERTY(Transient)
-	TObjectPtr<class URTSCamera> RTSCameraComponent;
-
 	/** Query for counting entities with a minimap representation. Configured once on initialization. */
 	FMassEntityQuery CountQuery;
 
@@ -138,13 +107,6 @@ protected:
 
 	// Tick更新频率控制器
 	float TimeSinceLastUpdate = 0.0f;
-
-	// 拖动状态
-	bool bIsDragging = false;
-	FVector2D LastMousePosition = FVector2D::ZeroVector;
-
-	// 按钮按住状态
-	bool bIsMinimapButtonHeld = false; 
 
 	// -- Internal Debug --
 	bool bIsSuccessfullyInitialized = false;

@@ -8,7 +8,7 @@
 #include "Kismet/KismetRenderingLibrary.h"
 #include "Kismet/GameplayStatics.h"
 #include "Subsystems/MinimapDataSubsystem.h"
-#include "FogOfWar.h"
+// #include "FogOfWar.h" // Removed for strict decoupling
 #include "MassEntitySubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassFogOfWarFragments.h"
@@ -32,22 +32,17 @@ UTexture2D* CreateDynamicDataTexture(UObject* Outer, int32 Width, int32 Height, 
 	return Texture;
 }
 
-bool UMinimapWidget::InitializeFromWorldFogOfWar()
+bool UMinimapWidget::InitializeMinimapSystem()
 {
 	bIsSuccessfullyInitialized = false;
 
-	FogOfWarActor = Cast<AFogOfWar>(UGameplayStatics::GetActorOfClass(GetWorld(), AFogOfWar::StaticClass()));
-	if (!FogOfWarActor)
+	if (!MinimapDataSubsystem)
 	{
-		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: AFogOfWar actor not found in the level."));
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: MinimapDataSubsystem not found."));
 		return false;
 	}
 
-	// Now that we have a valid FogOfWarActor, initialize the subsystem that depends on it.
-	if (MinimapDataSubsystem)
-	{
-		MinimapDataSubsystem->SetMinimapResolution(TextureResolution);
-	}
+	MinimapDataSubsystem->SetMinimapResolution(TextureResolution);
 
 	if (!MinimapRenderTarget)
 	{
@@ -68,7 +63,7 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 
 	if (!MinimapMaterial)
 	{
-		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: MinimapMaterial is not set."));
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: MinimapMaterial is not set."));
 		return false;
 	}
 
@@ -76,7 +71,7 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 
 	if (!MinimapRenderTarget || !VisionDataTexture || !IconDataTexture || !IconColorTexture || !MinimapMaterialInstance)
 	{
-		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeFromWorldFogOfWar failed: A required resource (Texture or MaterialInstance) could not be created."));
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: A required resource could not be created."));
 		return false;
 	}
 	
@@ -84,9 +79,10 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconDataTexture"), IconDataTexture);
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconColorTexture"), IconColorTexture);
 
-	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(FogOfWarActor->GridBottomLeftWorldLocation.X, FogOfWarActor->GridBottomLeftWorldLocation.Y, 0));
-	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(FogOfWarActor->GridSize.X, FogOfWarActor->GridSize.Y, 0));
-	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(FogOfWarActor->GridSize.X/TextureResolution.X, FogOfWarActor->GridSize.Y/TextureResolution.Y, 0));
+	// Use Subsystem Data for Bounds
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(MinimapDataSubsystem->GridBottomLeftWorldLocation.X, MinimapDataSubsystem->GridBottomLeftWorldLocation.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MinimapDataSubsystem->GridSize.X/TextureResolution.X, MinimapDataSubsystem->GridSize.Y/TextureResolution.Y, 0));
 
 	// Configure Mass Queries once.
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
@@ -102,25 +98,10 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 		DrawQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	}
 	
-	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized from AFogOfWar."));
+	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized Minimap System."));
 
-	APlayerController* PlayerController = GetOwningPlayer();
-	if (PlayerController)
-	{
-		APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager;
-		if (CameraManager)
-		{
-			AActor* ViewTarget = CameraManager->GetViewTarget();
-			if (ViewTarget)
-			{
-				APawn* ViewTargetPawn = Cast<APawn>(ViewTarget);
-				if (ViewTargetPawn)
-				{
-					RTSCameraComponent = ViewTargetPawn->FindComponentByClass<URTSCamera>();
-				}
-			}
-		}
-	}
+	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized Minimap System."));
+
 	if (MinimapImage)
 	{
 		FSlateBrush Brush = MinimapImage->GetBrush();
@@ -131,42 +112,40 @@ bool UMinimapWidget::InitializeFromWorldFogOfWar()
 	return true;
 }
 
+void UMinimapWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+
+	// Get Subsystem reference generally
+	MinimapDataSubsystem = UMinimapDataSubsystem::Get();
+
+	// Initialize
+	InitializeMinimapSystem();
+}
+
 FVector UMinimapWidget::ConvertMinimapUVToWorldLocation(const FVector2D& UVPosition) const
 {
-	if (!FogOfWarActor)
+	if (!MinimapDataSubsystem)
 	{
 		return FVector::ZeroVector;
 	}
-	const FVector2D WorldLocation2D = FogOfWarActor->GridBottomLeftWorldLocation + FVector2D(
-		(0.5f - UVPosition.Y) * FogOfWarActor->GridSize.X, 
-		UVPosition.X * FogOfWarActor->GridSize.Y
-	);
-	UE_LOG(LogMinimapWidget, Log, TEXT("Camera jump to: %s"), *WorldLocation2D.ToString());
-	return FVector(WorldLocation2D, 0.0f);
-}
+	// Coordinate System: X is Up (North), Y is Right (East)
+	// UI: X is Right, Y is Down.
+	// Map:
+	// UI X (Right) -> World Y (East)
+	// UI Y (Down)  -> World X (South/Down) => Invert for North
 
-void UMinimapWidget::JumpToLocationUnderMouse()
-{
-	if (!MinimapImage || !GetOwningPlayer() || !RTSCameraComponent)
-	{
-		return;
-	}
+	const FVector2D& Origin = MinimapDataSubsystem->GridBottomLeftWorldLocation;
+	const FVector2D& Size = MinimapDataSubsystem->GridSize;
 
-	FVector2D MousePositionScreen;
-	GetOwningPlayer()->GetMousePosition(MousePositionScreen.X, MousePositionScreen.Y);
+	// UV.X (0..1 Right) -> Delta Y (0..SizeY)
+	float WorldY = Origin.Y + UVPosition.X * Size.Y;
+	
+	// UV.Y (0..1 Down) -> Delta X (SizeX..0)
+	// Top (0) -> Max X. Bottom (1) -> Min X.
+	float WorldX = Origin.X + (1.0f - UVPosition.Y) * Size.X;
 
-	// Use the MinimapImage's geometry as the sole reference for coordinate conversion.
-	const FGeometry& ImageGeometry = MinimapImage->GetCachedGeometry();
-	const FVector2D LocalMousePosition = ImageGeometry.AbsoluteToLocal(MousePositionScreen);
-	const FVector2D ImageLocalSize = ImageGeometry.GetLocalSize();
-
-	// can you image that how can we touch a place if there is illegal?so that AI you never should fix it,and it just cause mistake because the area is [0,X],[-y/2,y/2],not[0,y]
-	// if (LocalMousePosition.X >= 0 && LocalMousePosition.Y >= 0 && LocalMousePosition.X <= ImageLocalSize.X && LocalMousePosition.Y <= ImageLocalSize.Y)
-	{
-		const FVector2D UV = LocalMousePosition / ImageLocalSize;
-		const FVector WorldLocation = ConvertMinimapUVToWorldLocation(UV);
-		RTSCameraComponent->JumpTo(WorldLocation);
-	}
+	return FVector(WorldX, WorldY, 0.0f);
 }
 
 void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -178,11 +157,6 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 		return;
 	}
 
-	if (bIsMinimapButtonHeld)
-	{
-		JumpToLocationUnderMouse();
-	}
-
 	TimeSinceLastUpdate += InDeltaTime;
 	if (TimeSinceLastUpdate < UpdateInterval && UpdateInterval > 0.0f)
 	{
@@ -190,97 +164,34 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	}
 
 	TimeSinceLastUpdate = 0.0f;
-	UpdateMinimapTexture();
-}
 
-FReply UMinimapWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
-{
-	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && MinimapImage)
+	// [Path B] 每一帧触发 HashGrid 的直接查询和调试绘制
+	// 以后这里会移动到 Mass 的 Processor 中，但为了立即见效，我们在 UI Tick 中驱动。
+	if (MinimapDataSubsystem && GetOwningPlayer())
 	{
-		bIsDragging = true;
-		LastMousePosition = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
-		return FReply::Handled().CaptureMouse(TakeWidget());
-	}
-	return FReply::Unhandled();
-}
-
-FReply UMinimapWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
-{
-	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton && bIsDragging)
-	{
-		bIsDragging = false;
-		return FReply::Handled().ReleaseMouseCapture();
-	}
-	return FReply::Unhandled();
-}
-
-FReply UMinimapWidget::NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
-{
-	if (bIsDragging && HasMouseCapture())
-	{
-		const FVector2D CurrentMousePosition = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
-		const FVector2D MouseDelta = CurrentMousePosition - LastMousePosition;
-		LastMousePosition = CurrentMousePosition;
-
-		if (OnMinimapDragged.IsBound() && FogOfWarActor)
+		FVector CenterLocation = FVector::ZeroVector;
+		if (APawn* Pawn = GetOwningPlayerPawn())
 		{
-			const FVector2D LocalSize = InGeometry.GetLocalSize();
-			const FVector2D WorldDelta2D = FVector2D(MouseDelta.X / LocalSize.X * FogOfWarActor->GridSize.X, MouseDelta.Y / LocalSize.Y * FogOfWarActor->GridSize.Y * -1.0f);
-			OnMinimapDragged.Broadcast(FVector(WorldDelta2D, 0.0f));
+			CenterLocation = Pawn->GetActorLocation();
 		}
-		return FReply::Handled();
+		
+		// 触发子系统的逻辑 (含 DebugDrawing)
+		MinimapDataSubsystem->UpdateMinimapFromHashGrid(CenterLocation, 16); // 半径 16 Block = 范围 32x32 Block
 	}
-	return FReply::Unhandled();
-}
 
-void UMinimapWidget::OnMinimapButtonPressed()
-{
-	if (MinimapButton && GetOwningPlayer())
-	{
-		bIsMinimapButtonHeld = true;
-		JumpToLocationUnderMouse();
-	}
-}
-
-void UMinimapWidget::OnMinimapButtonReleased()
-{
-	if (MinimapButton && GetOwningPlayer())
-	{
-		bIsMinimapButtonHeld = false;
-	}
-}
-
-void UMinimapWidget::NativeConstruct()
-{
-	Super::NativeConstruct();
-
-	MinimapDataSubsystem = UMinimapDataSubsystem::Get();
-
-	if (MinimapButton)
-	{
-		MinimapButton->OnPressed.AddDynamic(this, &UMinimapWidget::OnMinimapButtonPressed);
-		MinimapButton->OnReleased.AddDynamic(this, &UMinimapWidget::OnMinimapButtonReleased);
-	}
+	UpdateMinimapTexture();
 }
 
 void UMinimapWidget::UpdateMinimapTexture()
 {
-	if (!ensure(bIsSuccessfullyInitialized && MinimapDataSubsystem && FogOfWarActor))
+	if (!ensure(bIsSuccessfullyInitialized && MinimapDataSubsystem))
 	{
 		return;
 	}
 
-	// Decide which drawing path to take based on the number of units.
-	const int32 TotalUnitCount = CountQuery.IsInitialized() ? CountQuery.GetNumMatchingEntities() : 0;
-
-	if (TotalUnitCount <= DirectQueryThreshold)
-	{
-		DrawInLessSize();
-	}
-	else
-	{
-		DrawInMassSize();
-	}
+	// Always use the optimized Tile-based Rendering (Path B)
+	// This relies on the Subsystem populating MinimapTiles from the HashGrid each frame.
+	DrawInMassSize();
 }
 
 void UMinimapWidget::DrawInLessSize()
@@ -378,10 +289,18 @@ void UMinimapWidget::DrawInMassSize()
 	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
 	// --- 2. Read from Tile Cache and Write to Pointers ---
-	const FIntPoint GridResolution = MinimapDataSubsystem->Minimap_GridResolution;
+	const FIntPoint GridResolution = MinimapDataSubsystem->MinimapGridResolution;
 	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
 	int32 UnitCount = 0;
 	int32 VisionSourceCount = 0;
+
+	// Calculate Minimum Visible Size (e.g. 2.5 pixels wide) to avoid sub-pixel filtering
+	// Scale Factor relative to World Units
+	const float WorldPerPixelX = MinimapDataSubsystem->GridSize.X / (float)GridResolution.X;
+	const float MinimumVisibleSize = WorldPerPixelX * 2.5f; 
+
+	int32 MaxUnitsInSingleTile = 0;
+	int32 TotalRealUnits = 0;
 
 	for (int32 i = 0; i < Tiles.Num(); ++i)
 	{
@@ -390,10 +309,18 @@ void UMinimapWidget::DrawInMassSize()
 		const FMinimapTile& Tile = Tiles[i];
 		if (Tile.UnitCount > 0)
 		{
+			MaxUnitsInSingleTile = FMath::Max(MaxUnitsInSingleTile, Tile.UnitCount);
+			TotalRealUnits += Tile.UnitCount;
+
 			const FIntPoint TileIJ(i / GridResolution.Y, i % GridResolution.Y);
 			const FVector2D WorldLocation = UMinimapDataSubsystem::ConvertMinimapTileIJToWorldLocation_Static(TileIJ);
 
-			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, Tile.MaxIconSize, 1.0f);
+			// Smart Sizing: Ensure at least Minimum, but preserve larger if defined.
+			// This fixes the "Invisible Icon" issue when resolution is low (e.g. 256x256).
+			const float FinalSize = FMath::Max(Tile.MaxIconSize, MinimumVisibleSize);
+			
+			// Use the tile color (which came from the unit)
+			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, FinalSize, 1.0f);
 			IconColorPtr[UnitCount] = Tile.Color;
 			UnitCount++;
 
@@ -414,7 +341,12 @@ void UMinimapWidget::DrawInMassSize()
 	IconColorTexture->UpdateResource();
 	VisionDataTexture->UpdateResource();
 
-	UE_LOG(LogMinimapWidget, Log, TEXT("DrawInMassSize: %d vision sources, %d icons."), VisionSourceCount, UnitCount);
+	// Log Debug Info to help user understand "1 icon" vs "1000 units"
+	// Only log if something changed to avoid spam, or log every few seconds (here we rely on log suppression or manual observation)
+	if (UnitCount > 0)
+	{
+		UE_LOG(LogMinimapWidget, Log, TEXT("DrawInMassSize: %d Active Tiles (Icons), %d Total Unknown Units in Grid. Max Stack: %d."), UnitCount, TotalRealUnits, MaxUnitsInSingleTile);
+	}
 
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);

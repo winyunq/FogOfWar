@@ -121,11 +121,7 @@ void AFogOfWar::Activate()
 
 	PostProcess->AddOrUpdateBlendable(PostProcessingMID);
 
-	// Register this actor with the MinimapDataSubsystem to provide it with grid parameters
-	if (UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get())
-	{
-		MinimapSubsystem->UpdateVisionGridParameters(this);
-	}
+	// Deprecated: MinimapSubsystem is now decoupled from AFogOfWar.
 
 	auto GameManager = UManagerStatics::GetGameManager(this);
 	GameManager->Register<ThisClass>(this);
