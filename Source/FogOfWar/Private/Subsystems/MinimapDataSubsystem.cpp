@@ -1,7 +1,8 @@
 // Copyright Winyunq, 2025. All Rights Reserved.
 
 #include "Subsystems/MinimapDataSubsystem.h"
-// #include "FogOfWar.h" // Removed for strict decoupling
+#include "MassBattleMinimapRegion.h" // Updated Actor-Driven Region
+#include "Kismet/GameplayStatics.h"
 #include "Subsystems/MassBattleHashGridSubsystem.h"
 #include "MassEntitySubsystem.h"
 #include "MassFogOfWarFragments.h"
@@ -14,6 +15,21 @@ void UMinimapDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	SingletonInstance = this;
+
+	// 被动初始化：如果场景中已存在 MinimapRegion，则自动提取参数
+	TArray<AActor*> FoundRegions;
+	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMinimapRegion::StaticClass(), FoundRegions);
+	if (FoundRegions.Num() > 0)
+	{
+		if (AMinimapRegion* Region = Cast<AMinimapRegion>(FoundRegions[0]))
+		{
+			const FVector Origin = Region->GetActorLocation();
+			const FVector BoxExtent = Region->BoundsComponent->GetScaledBoxExtent();
+			const FVector2D GridOrigin(Origin.X - BoxExtent.X, Origin.Y - BoxExtent.Y);
+			const FVector2D GridSizeVal(BoxExtent.X * 2.f, BoxExtent.Y * 2.f);
+			InitMinimapGrid(GridOrigin, GridSizeVal, Region->GridResolution);
+		}
+	}
 }
 
 void UMinimapDataSubsystem::Deinitialize()

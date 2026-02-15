@@ -32,7 +32,7 @@ public class FogOfWar : ModuleRules
 				"MassRepresentation", // Needed for FMassVisibilityFragment
 				"MassSignals", // Often used in modern Mass development
 				"MassLOD", // Required for LOD-based culling tags
-				"OpenRTSCamera", // Added for RTS camera integration
+				"MassBattleMinimap", // Added for RTS/Mass minimap integration
 				"EnhancedInput", // Required because RTSCamera.h includes InputMappingContext.h
 				"MassCommon", // For Mass types
 				"MassEntity", 
