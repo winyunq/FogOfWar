@@ -192,6 +192,10 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 					MiniTile.UnitCount++;
 
 					FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+					// HashGrid 不与 Mass Entity 生命周期同步，Entity 可能已被销毁
+					// 必须在访问任何 Fragment 前检查，否则触发 IsEntityValid 断言崩溃
+					if (!EntityManager.IsEntityValid(AgentData.EntityHandle)) continue;
 					
 					// Fallback Defaults
 					FLinearColor IconColor = FLinearColor::White;
