@@ -1,77 +1,93 @@
 # FogOfWar
 
-MassBattle-oriented fog of war and minimap plugin for RTS projects.
+面向 MassBattle / RTS 的战争迷雾与小地图插件。
 
-This branch is the MassBattle integration branch. It reads MassBattle runtime data directly, especially `FLocating`, `FTeam`, and `UMassBattleHashGridSubsystem`, instead of maintaining a second unit registry.
+当前默认分支是 `Mass`，这是 MassBattle 集成版本。插件直接复用 MassBattle 的运行时数据，重点读取：
 
-## Dependencies
+- `FLocating`：MassBattle 单位真实位置。
+- `FTeam`：队伍编号。
+- `UMassBattleHashGridSubsystem`：MassBattle 已经维护好的空间 HashGrid。
 
-The plugin currently depends on these open-source project plugins:
+原则：不要再维护第二套单位列表，不要用 `FTransformFragment` 当 MassBattle 单位位置来源。
+
+## 依赖
+
+本插件依赖以下项目插件：
 
 - `MassBattle`
 - `MassBattleMinimap`
 - `OpenRTSCamera`
 
-It also uses Unreal Engine Mass modules and standard engine plugins/modules:
+同时使用 UE Mass / UI / 渲染相关模块：
 
 - `MassGameplay`
-- `MassEntity`, `MassCommon`, `MassMovement`, `MassSpawner`, `MassRepresentation`, `MassSignals`, `MassLOD`
+- `MassEntity`、`MassCommon`、`MassMovement`、`MassSpawner`
+- `MassRepresentation`、`MassSignals`、`MassLOD`
 - `EnhancedInput`
-- `UMG`, `Slate`, `SlateCore`, `RHI`, `RenderCore`
+- `UMG`、`Slate`、`SlateCore`
+- `RHI`、`RenderCore`
 
-The declared plugin dependencies are in `FogOfWar.uplugin`. If you want to use FogOfWar without MassBattle, change `Source/FogOfWar/Public/FogOfWarMassBinding.h` to bind to your own location/team fragments or to the fallback fragments, and remove the MassBattle-specific Build.cs/uplugin dependencies.
+依赖声明在 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs`。
 
-## Quick Start
+如果项目不使用 MassBattle，需要改 `Source/FogOfWar/Public/FogOfWarMassBinding.h`，把位置和队伍 Fragment 绑定到你自己的数据结构，并移除 `.uplugin` / `Build.cs` 里的 MassBattle 依赖。
 
-### 1. Enable dependencies
+## 场景战争迷雾怎么用
 
-Place the dependency plugins next to this plugin or enable them in the host project. Then enable `FogOfWar` in the `.uproject`.
+在关卡里拖入一个 `AFogOfWar`。
 
-### 2. Scene fog
+必须配置：
 
-Add an `AFogOfWar` actor to the level.
-
-Set these properties:
-
-- `GridVolume`: a volume covering the playable battlefield.
+- `GridVolume`：覆盖战场范围的 Volume。
 - `InterpolationMaterial`
 - `AfterInterpolationMaterial`
 - `SuperSamplingMaterial`
 - `PostProcessingMaterial`
 - `bAutoActivate = true`
 
-MassBattle agents are auto-bound when `UMinimapDataSubsystem::bAutoBindMassBattleAgents` is true. The default auto-bound values are:
+MassBattle 单位默认会自动绑定视野，开关在：
 
-- `DefaultMassBattleSightRadius`
-- `DefaultMinimapUnitPixelRadius`
-- `TeamColors`
+```text
+UMinimapDataSubsystem::bAutoBindMassBattleAgents
+```
 
-For explicit per-archetype setup, add `UMassVisionTrait` to the Mass agent config and set:
+默认参数：
 
-- `SightRadius`
-- `bShouldBeRepresentedOnMinimap`
-- `MinimapIconColor`
-- `MinimapIconSize`
+```text
+DefaultMassBattleSightRadius
+DefaultMinimapUnitPixelRadius
+TeamColors
+```
 
-### 3. Minimap widget
+如果希望在 Mass AgentConfig 中显式配置，给单位加 `UMassVisionTrait`：
 
-Create a UMG widget derived from `UMinimapWidget`.
+- `SightRadius`：视野半径。
+- `bShouldBeRepresentedOnMinimap`：是否显示在小地图。
+- `MinimapIconColor`：小地图颜色。
+- `MinimapIconSize`：小地图像素半径。
 
-In the widget:
+## 小地图怎么用
 
-- Add an `Image` named `MinimapImage`.
-- Assign `MinimapMaterial`.
-- Set `TextureResolution` if the default `256x256` is not enough.
-- Add the widget to the viewport like any other UMG widget.
+创建一个继承 `UMinimapWidget` 的 UMG Widget。
 
-`UMinimapWidget` creates its own render target and binds it to `MinimapImage`. It also drives `UMinimapDataSubsystem::UpdateMinimapFromHashGrid`, so no separate unit list is required.
+Widget 里需要：
 
-The minimap material receives these parameters:
+- 添加一个 `Image`，名字必须是 `MinimapImage`。
+- 给 `MinimapMaterial` 绑定一个小地图材质。
+- 按需要设置 `TextureResolution`，默认是 `256x256`。
+- 像普通 UMG 一样 Add To Viewport。
+
+`UMinimapWidget` 会自动创建 RenderTarget，并把 RenderTarget 设置给 `MinimapImage`。运行时它会驱动：
+
+```text
+UMinimapDataSubsystem::UpdateMinimapFromHashGrid
+```
+
+小地图材质会收到这些参数：
 
 ```text
 VisionDataTexture / VisionSourceDataTexture: (WorldX, WorldY, Reserved, SightRadiusWorld)
 IconDataTexture / UnitLocationDataTexture:   (WorldX, WorldY, IconPixelRadius, Reserved)
-IconColorTexture / UnitColorDataTexture:     unit color
+IconColorTexture / UnitColorDataTexture:     单位颜色
 NumberOfVisionSources
 NumberOfUnits
 GridBottomLeftWorldLocation
@@ -79,13 +95,19 @@ GridSize / GridWorldSize
 UnitSize
 ```
 
-The minimap draws one representative icon per occupied minimap presentation sample. This is deliberate: the minimap is a low-resolution UI layer, not the authoritative scene fog model.
+小地图是低分辨率 UI 表示。256x256 小地图本质是 65536 个显示采样点，不是场景战争迷雾的真实模型。
 
-## Updating the Scene Fog Material
+## 镜头战争迷雾材质怎么改
 
-Scene fog and minimap fog are separate systems.
+重点：镜头内战争迷雾不要走小地图数据，不要走 tile。为了性能，CPU 只做三件事：
 
-For the main camera, the CPU uploads a compact list of circular vision sources to the post-process material:
+1. 用 RTSCamera 的地面四点确定当前镜头附近区域。
+2. 用 MassBattle HashGrid 收集可能影响镜头的视野源。
+3. 对同一个 HashGrid cell 内的视野源做保守合并，上传圆形视野源给 GPU。
+
+最终揭雾一定在 GPU 后处理材质里按圆判断。
+
+`PostProcessingMaterial` 会收到：
 
 ```text
 FOW_SceneGpuVisionSourceTexture: (WorldX, WorldY, SightRadius, Reserved)
@@ -93,43 +115,59 @@ FOW_SceneGpuVisionSourceCount
 FOW_EnableSceneGpuVisionSources
 ```
 
-Update `PostProcessingMaterial` so it:
+材质逻辑应该是：
 
-1. Reconstructs or reads the current pixel world position in XY.
-2. If `FOW_EnableSceneGpuVisionSources > 0`, loops from `0` to `FOW_SceneGpuVisionSourceCount - 1`.
-3. Reads each source from `FOW_SceneGpuVisionSourceTexture`.
-4. Uses circular visibility:
+1. 取当前像素对应的世界坐标 `CurrentPixelWorldXY`。
+2. 遍历 `FOW_SceneGpuVisionSourceTexture` 中的圆形视野源。
+3. 用距离平方判断当前像素是否被任意圆覆盖。
+4. 没有被覆盖才应用迷雾。
+
+HLSL 核心逻辑：
 
 ```hlsl
-float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
-float2 Delta = CurrentPixelWorldXY - Source.xy;
-bool bVisible = dot(Delta, Delta) <= Source.z * Source.z;
+float Visible = 0.0;
+
+if (FOW_EnableSceneGpuVisionSources > 0.5)
+{
+    [loop]
+    for (int SourceIndex = 0; SourceIndex < (int)FOW_SceneGpuVisionSourceCount; ++SourceIndex)
+    {
+        float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
+        float2 Delta = CurrentPixelWorldXY - Source.xy;
+        float RadiusSq = Source.z * Source.z;
+
+        Visible = max(Visible, dot(Delta, Delta) <= RadiusSq ? 1.0 : 0.0);
+    }
+}
 ```
 
-5. Applies fog only when no circle covers the pixel.
-
-Do not use AABB as the final reveal shape. Bounds are only used on the CPU as a broad-phase HashGrid query window. The final scene reveal shape is circular.
-
-For a soft edge, replace the boolean test with a smooth falloff:
+如果要柔边：
 
 ```hlsl
 float Dist = length(CurrentPixelWorldXY - Source.xy);
-float Visibility = 1.0 - smoothstep(Source.z - EdgeWidth, Source.z, Dist);
+float CircleVisibility = 1.0 - smoothstep(Source.z - EdgeWidth, Source.z, Dist);
+Visible = max(Visible, CircleVisibility);
 ```
 
-For temporal smoothing, blend the resulting visibility with a previous visibility/history render target or the existing interpolation pass. Keep the source data circular.
+然后：
 
-## Important Settings
+```hlsl
+FinalColor = lerp(FogColor, SceneColor, Visible);
+```
 
-`AFogOfWar`:
+不要把 AABB 当成最终揭雾形状。AABB 只允许在 CPU 上作为 HashGrid broad-phase 查询窗口，目的是少扫数据。真正显示层只认圆。
 
-- `MaxSceneGpuVisionSources`: upload limit for the scene post-process material.
-- `bCullSceneGpuVisionSourcesToCamera`: collect only sources near the current camera ground quadrilateral.
-- `SceneGpuVisionCullPadding`: extra camera-edge padding.
-- `SceneGpuVisionSourceSearchPadding`: must be at least the largest expected sight radius, otherwise off-camera large vision sources can be missed.
-- `SceneGpuVisionQueryZHalfRange`: Z range used when querying the 3D MassBattle HashGrid.
+## 性能参数
 
-`UMinimapDataSubsystem`:
+`AFogOfWar`：
+
+- `MaxSceneGpuVisionSources`：最多上传多少个镜头迷雾圆源。
+- `bCullSceneGpuVisionSourcesToCamera`：是否只收集镜头附近源。
+- `SceneGpuVisionCullPadding`：镜头边缘额外保留距离。
+- `SceneGpuVisionSourceSearchPadding`：必须不小于最大视野半径，否则镜头外大视野源可能漏掉。
+- `SceneGpuVisionQueryZHalfRange`：查询 HashGrid 的 Z 半范围。
+
+`UMinimapDataSubsystem`：
 
 - `bAutoBindMassBattleAgents`
 - `DefaultMassBattleSightRadius`
@@ -138,7 +176,7 @@ For temporal smoothing, blend the resulting visibility with a previous visibilit
 - `TeamColors`
 - `bEnableMinimapPerformanceStats`
 
-`UMinimapWidget`:
+`UMinimapWidget`：
 
 - `TextureResolution`
 - `UpdateInterval`
@@ -146,31 +184,31 @@ For temporal smoothing, blend the resulting visibility with a previous visibilit
 - `bEncodeUnitsIntoMinimapMaterial`
 - `bDrawUnitsWithCanvasOverlay`
 
-## Debugging
+## 调试性能
 
-Enable minimap performance logs with:
+打开：
 
 ```text
 UMinimapDataSubsystem::bEnableMinimapPerformanceStats = true
 ```
 
-Typical log categories:
+日志里看：
 
 ```text
 [MinimapPerf][HashGridRead]
 [MinimapPerf][Draw]
 ```
 
-Use these logs to distinguish HashGrid traversal cost, texture upload cost, render-target draw cost, and number of represented units.
+这些日志可以区分 HashGrid 遍历、纹理上传、RenderTarget 绘制和实际代表单位数量。
 
-## Architecture Rules
+## 架构注意事项
 
-- `FLocating` is the MassBattle authoritative location fragment.
-- Do not read `FTransformFragment` for MassBattle agents.
-- Do not maintain a second authoritative FogOfWar unit list.
-- Do not use minimap presentation data as scene fog source data.
-- Scene fog final visibility is circular.
-- AABB/bounds are broad-phase CPU query helpers only.
-- Team color should be indexed through `TeamColors[TeamId]`, not repeated if/switch logic.
+- MassBattle 位置真理是 `FLocating`。
+- 不要对 MassBattle 单位读取 `FTransformFragment`。
+- 不要为 FogOfWar 再建一套权威单位列表。
+- 小地图数据不能当作镜头战争迷雾数据。
+- 镜头战争迷雾最终形状是圆。
+- AABB / Bounds 只用于 CPU broad-phase。
+- 队伍颜色走 `TeamColors[TeamId]`，不要在热路径写大量 if/switch。
 
-See `ARCHITECTURE_MEMORY.md` for integration notes and pitfalls.
+更多坑点见 `ARCHITECTURE_MEMORY.md`。
