@@ -56,6 +56,15 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance")
 	TObjectPtr<UMaterialInterface> MinimapMaterial;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance")
+	bool bDrawUnitsWithCanvasOverlay = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance")
+	bool bEncodeUnitsIntoMinimapMaterial = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance", meta = (ClampMin = "1.0", UIMin = "1.0"))
+	float CanvasUnitDotSize = 2.0f;
+
 	/** 小地图纹理的分辨率 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance")
 	FIntPoint TextureResolution = FIntPoint(256, 256);

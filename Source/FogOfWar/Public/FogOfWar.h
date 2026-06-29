@@ -157,6 +157,30 @@ public:
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Materials")
 	TObjectPtr<UMaterialInterface> PostProcessingMaterial;
 
+	/// @brief 为场景后处理材质提供逐像素 GPU 揭雾源。它独立于小地图战争迷雾。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU")
+	bool bEnableSceneGpuVisionSources = true;
+
+	/// @brief 传给场景后处理材质的最大视野源数量。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "1", UIMin = "1"))
+	int32 MaxSceneGpuVisionSources = 4096;
+
+	/// @brief 只收集当前玩家镜头地面投影范围附近的视野源；最终揭雾仍由 GPU 按圆形半径判断。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU")
+	bool bCullSceneGpuVisionSourcesToCamera = true;
+
+	/// @brief 镜头投影范围外额外保留的世界距离，避免边缘闪烁。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float SceneGpuVisionCullPadding = 2048.0f;
+
+	/// @brief HashGrid 查询外扩半径。应不小于项目中最大的场景揭雾半径，以捕捉镜头外覆盖到镜头内的视野源。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float SceneGpuVisionSourceSearchPadding = 12000.0f;
+
+	/// @brief 场景 GPU 视野源查询的 Z 半范围，避免在 3D HashGrid 中扫描无关高度层。
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float SceneGpuVisionQueryZHalfRange = 10000.0f;
+
 //#if WITH_EDITORONLY_DATA
 	/// @brief 【调试】压力测试模式，忽略所有缓存，强制每帧重新计算所有单位的视野。
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Debug")
@@ -262,6 +286,15 @@ public:
 	 * @details     要写入数据的快照纹理。
 	 */
 	void WriteVisionDataToTexture(UTexture2D* Texture);
+
+	/** 更新场景后处理专用的 Mass 视野源纹理。 */
+	void UpdateSceneGpuVisionSourceTexture();
+
+	/** 优先读取 RTSCamera 已计算的地面四点；失败时退回 PlayerController 屏幕角反投影。 */
+	bool TryGetCameraGroundFrustum(FVector2D OutFrustumPoints[4]) const;
+
+	/** 从四点计算当前玩家镜头地面查询窗口，只用于 HashGrid broad-phase，不代表迷雾形状。 */
+	static bool BuildGroundBoundsFromFrustum(const FVector2D FrustumPoints[4], FBox2D& OutBounds);
 	//~ End Core Logic Functions
 
 	//~ Begin Inline Helper Functions
@@ -349,6 +382,16 @@ public:
 	/// @brief PostProcessingMaterial的动态实例。
 	UPROPERTY()
 	TObjectPtr<UMaterialInstanceDynamic> PostProcessingMID;
+
+	/// @brief 场景后处理材质读取的视野源数据纹理；每个 texel 为 (WorldX, WorldY, SightRadius, Reserved)。
+	UPROPERTY(VisibleInstanceOnly, Category = "FogOfWar|Textures")
+	TObjectPtr<UTexture2D> SceneGpuVisionSourceTexture = nullptr;
+
+	/// @brief 避免每帧重复分配的场景视野源上传缓冲。
+	TArray<FLinearColor> SceneGpuVisionSourceDataBuffer;
+
+	/// @brief 当前已写入 SceneGpuVisionSourceTexture 的视野源数量。
+	int32 SceneGpuVisionSourceCount = 0;
 
 	/// @brief 用于将可见性数据写入纹理的共享缓冲区，避免重复分配内存。
 	TArray<uint8> TextureDataBuffer;

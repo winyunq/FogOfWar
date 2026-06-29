@@ -327,9 +327,9 @@ void UMassBattleFogOfWarBootstrapProcessor::Execute(FMassEntityManager& EntityMa
 	}
 
 	const float DefaultSightRadius = MinimapSubsystem->DefaultMassBattleSightRadius;
-	const float DefaultIconSize = MinimapSubsystem->DefaultMassBattleMinimapIconSize;
+	const float DefaultIconPixelRadius = MinimapSubsystem->DefaultMinimapUnitPixelRadius;
 
-	EntityQuery.ForEachEntityChunk(Context, [MinimapSubsystem, DefaultSightRadius, DefaultIconSize](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [MinimapSubsystem, DefaultSightRadius, DefaultIconPixelRadius](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FOW_TEAM_FRAGMENT> TeamList = Context.GetFragmentView<FOW_TEAM_FRAGMENT>();
 		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
@@ -357,7 +357,7 @@ void UMassBattleFogOfWarBootstrapProcessor::Execute(FMassEntityManager& EntityMa
 			{
 				FMassMinimapRepresentationFragment RepresentationFragment;
 				RepresentationFragment.IconColor = MinimapSubsystem->GetTeamColor(FOW_GET_TEAM_INDEX(TeamList[EntityIndex]));
-				RepresentationFragment.IconSize = DefaultIconSize;
+				RepresentationFragment.IconSize = DefaultIconPixelRadius;
 				Context.Defer().PushCommand<FMassCommandAddFragmentInstances>(Entity, RepresentationFragment);
 			}
 

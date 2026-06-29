@@ -3,6 +3,7 @@
 #include "UI/MinimapWidget.h"
 #include "FogOfWarMassBinding.h"
 #include "Components/Image.h"
+#include "Engine/Canvas.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -13,8 +14,19 @@
 #include "MassEntitySubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassFogOfWarFragments.h"
+#include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMinimapWidget, Log, All);
+
+namespace
+{
+	struct FMinimapCanvasDot
+	{
+		FVector2D Position = FVector2D::ZeroVector;
+		FLinearColor Color = FLinearColor::White;
+	};
+}
 
 // 辅助函数：创建一个支持CPU访问的动态数据纹理
 UTexture2D* CreateDynamicDataTexture(UObject* Outer, int32 Width, int32 Height, FName Name)
@@ -77,12 +89,16 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	}
 	
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("VisionDataTexture"), VisionDataTexture);
+	MinimapMaterialInstance->SetTextureParameterValue(TEXT("VisionSourceDataTexture"), VisionDataTexture);
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconDataTexture"), IconDataTexture);
+	MinimapMaterialInstance->SetTextureParameterValue(TEXT("UnitLocationDataTexture"), IconDataTexture);
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconColorTexture"), IconColorTexture);
+	MinimapMaterialInstance->SetTextureParameterValue(TEXT("UnitColorDataTexture"), IconColorTexture);
 
 	// Use Subsystem Data for Bounds
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(MinimapDataSubsystem->GridBottomLeftWorldLocation.X, MinimapDataSubsystem->GridBottomLeftWorldLocation.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridWorldSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MinimapDataSubsystem->GridSize.X/TextureResolution.X, MinimapDataSubsystem->GridSize.Y/TextureResolution.Y, 0));
 
 	// Configure Mass Queries once.
@@ -192,6 +208,7 @@ void UMinimapWidget::UpdateMinimapTexture()
 
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(MinimapDataSubsystem->GridBottomLeftWorldLocation.X, MinimapDataSubsystem->GridBottomLeftWorldLocation.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridWorldSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MinimapDataSubsystem->MinimapTileSize.X, MinimapDataSubsystem->MinimapTileSize.Y, 0));
 
 	// Always use the optimized Tile-based Rendering (Path B)
@@ -218,6 +235,10 @@ void UMinimapWidget::DrawInLessSize()
 
 	FTexture2DMipMap& VisionDataMip = VisionDataTexture->GetPlatformData()->Mips[0];
 	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
+
+	FMemory::Memzero(IconDataPtr, IconDataTexture->GetSizeX() * IconDataTexture->GetSizeY() * sizeof(FLinearColor));
+	FMemory::Memzero(IconColorPtr, IconColorTexture->GetSizeX() * IconColorTexture->GetSizeY() * sizeof(FLinearColor));
+	FMemory::Memzero(VisionDataPtr, VisionDataTexture->GetSizeX() * VisionDataTexture->GetSizeY() * sizeof(FLinearColor));
 
 	// --- 2. Define and Execute Query for All Minimap Entities ---
 	int32 UnitCount = 0;
@@ -249,7 +270,7 @@ void UMinimapWidget::DrawInLessSize()
 			IconColorPtr[UnitCount] = RepFragment.IconColor;
 			UnitCount++;
 
-			if (VisionFragment.SightRadius > 0.0f)
+			if (MinimapDataSubsystem->bEncodeMinimapVisionSources && VisionFragment.SightRadius > 0.0f)
 			{
 				if (VisionSourceCount >= MaxUnits) break;
 				VisionDataPtr[VisionSourceCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, 0.0f, VisionFragment.SightRadius);
@@ -278,12 +299,18 @@ void UMinimapWidget::DrawInLessSize()
 
 void UMinimapWidget::DrawInMassSize()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE_STR("Minimap.DrawInMassSize");
+
 	if (!MinimapDataSubsystem || !IconDataTexture || !IconColorTexture || !VisionDataTexture)
 	{
 		return;
 	}
 
+	const double TotalStartTime = FPlatformTime::Seconds();
+	FMinimapDrawPerfStats DrawStats;
+
 	// --- 1. Lock Textures for Direct Writing ---
+	const double LockStartTime = FPlatformTime::Seconds();
 	FTexture2DMipMap& IconDataMip = IconDataTexture->GetPlatformData()->Mips[0];
 	FLinearColor* IconDataPtr = static_cast<FLinearColor*>(IconDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
@@ -293,23 +320,31 @@ void UMinimapWidget::DrawInMassSize()
 	FTexture2DMipMap& VisionDataMip = VisionDataTexture->GetPlatformData()->Mips[0];
 	FLinearColor* VisionDataPtr = static_cast<FLinearColor*>(VisionDataMip.BulkData.Lock(LOCK_READ_WRITE));
 
+	FMemory::Memzero(IconDataPtr, IconDataTexture->GetSizeX() * IconDataTexture->GetSizeY() * sizeof(FLinearColor));
+	FMemory::Memzero(IconColorPtr, IconColorTexture->GetSizeX() * IconColorTexture->GetSizeY() * sizeof(FLinearColor));
+	FMemory::Memzero(VisionDataPtr, VisionDataTexture->GetSizeX() * VisionDataTexture->GetSizeY() * sizeof(FLinearColor));
+	DrawStats.LockTexturesMs = static_cast<float>((FPlatformTime::Seconds() - LockStartTime) * 1000.0);
+
 	// --- 2. Read from Tile Cache and Write to Pointers ---
 	const FIntPoint GridResolution = MinimapDataSubsystem->MinimapGridResolution;
 	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
-	int32 UnitCount = 0;
+	DrawStats.SourceTilesScanned = Tiles.Num();
+	int32 ActiveTileCount = 0;
+	int32 MaterialUnitCount = 0;
 	int32 VisionSourceCount = 0;
-
-	// Calculate Minimum Visible Size (e.g. 2.5 pixels wide) to avoid sub-pixel filtering
-	// Scale Factor relative to World Units
-	const float WorldPerPixelX = MinimapDataSubsystem->GridSize.X / (float)GridResolution.X;
-	const float MinimumVisibleSize = WorldPerPixelX * 2.5f; 
 
 	int32 MaxUnitsInSingleTile = 0;
 	int32 TotalRealUnits = 0;
+	TArray<FMinimapCanvasDot> CanvasDots;
+	if (bDrawUnitsWithCanvasOverlay)
+	{
+		CanvasDots.Reserve(FMath::Min(MaxUnits, Tiles.Num()));
+	}
 
+	const double ScanStartTime = FPlatformTime::Seconds();
 	for (int32 i = 0; i < Tiles.Num(); ++i)
 	{
-		if (UnitCount >= MaxUnits) break;
+		if (ActiveTileCount >= MaxUnits) break;
 
 		const FMinimapTile& Tile = Tiles[i];
 		if (Tile.UnitCount > 0)
@@ -320,16 +355,23 @@ void UMinimapWidget::DrawInMassSize()
 			const FIntPoint TileIJ(i / GridResolution.Y, i % GridResolution.Y);
 			const FVector2D WorldLocation = UMinimapDataSubsystem::ConvertMinimapTileIJToWorldLocation_Static(TileIJ);
 
-			// Smart Sizing: Ensure at least Minimum, but preserve larger if defined.
-			// This fixes the "Invisible Icon" issue when resolution is low (e.g. 256x256).
-			const float FinalSize = FMath::Max(Tile.MaxIconSize, MinimumVisibleSize);
-			
-			// Use the tile color (which came from the unit)
-			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, FinalSize, 1.0f);
-			IconColorPtr[UnitCount] = Tile.Color;
-			UnitCount++;
+			if (bEncodeUnitsIntoMinimapMaterial && MaterialUnitCount < MaxUnits)
+			{
+				IconDataPtr[MaterialUnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, Tile.MaxIconSize, 1.0f);
+				IconColorPtr[MaterialUnitCount] = Tile.Color;
+				MaterialUnitCount++;
+			}
 
-			if (Tile.MaxSightRadius > 0.0f)
+			if (bDrawUnitsWithCanvasOverlay)
+			{
+				const FVector2D DotPosition(
+					((static_cast<float>(TileIJ.Y) + 0.5f) / static_cast<float>(GridResolution.Y)) * static_cast<float>(TextureResolution.X),
+					(1.0f - ((static_cast<float>(TileIJ.X) + 0.5f) / static_cast<float>(GridResolution.X))) * static_cast<float>(TextureResolution.Y));
+				CanvasDots.Add({ DotPosition, Tile.Color });
+			}
+			ActiveTileCount++;
+
+			if (MinimapDataSubsystem->bEncodeMinimapVisionSources && Tile.MaxSightRadius > 0.0f)
 			{
 				if (VisionSourceCount >= MaxUnits) break;
 				VisionDataPtr[VisionSourceCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, 0.0f, Tile.MaxSightRadius);
@@ -337,26 +379,55 @@ void UMinimapWidget::DrawInMassSize()
 			}
 		}
 	}
+	DrawStats.ScanTilesMs = static_cast<float>((FPlatformTime::Seconds() - ScanStartTime) * 1000.0);
+	DrawStats.ActiveTiles = ActiveTileCount;
+	DrawStats.EncodedUnits = MaterialUnitCount;
+	DrawStats.EncodedVisionSources = VisionSourceCount;
+	DrawStats.TotalUnitsRepresented = TotalRealUnits;
+	DrawStats.MaxUnitsInSingleTile = MaxUnitsInSingleTile;
 
 	// --- 3. Unlock Textures & Finalize ---
 	IconDataMip.BulkData.Unlock();
 	IconColorMip.BulkData.Unlock();
 	VisionDataMip.BulkData.Unlock();
+	const double UploadStartTime = FPlatformTime::Seconds();
 	IconDataTexture->UpdateResource();
 	IconColorTexture->UpdateResource();
 	VisionDataTexture->UpdateResource();
+	DrawStats.UploadTexturesMs = static_cast<float>((FPlatformTime::Seconds() - UploadStartTime) * 1000.0);
 
 	// Log Debug Info to help user understand "1 icon" vs "1000 units"
 	// Only log if something changed to avoid spam, or log every few seconds (here we rely on log suppression or manual observation)
-	if (UnitCount > 0)
+	if (ActiveTileCount > 0)
 	{
-		UE_LOG(LogMinimapWidget, Log, TEXT("DrawInMassSize: %d Active Tiles (Icons), %d Total Unknown Units in Grid. Max Stack: %d."), UnitCount, TotalRealUnits, MaxUnitsInSingleTile);
+		UE_LOG(LogMinimapWidget, Log, TEXT("DrawInMassSize: %d Active Tiles, %d Material Icons, %d Vision Sources, %d Total Unknown Units in Grid. Max Stack: %d."), ActiveTileCount, MaterialUnitCount, VisionSourceCount, TotalRealUnits, MaxUnitsInSingleTile);
 	}
 
-	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), MaterialUnitCount);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
 
 	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
+	const double DrawStartTime = FPlatformTime::Seconds();
 	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
+	if (bDrawUnitsWithCanvasOverlay && CanvasDots.Num() > 0)
+	{
+		UCanvas* Canvas = nullptr;
+		FVector2D CanvasSize = FVector2D::ZeroVector;
+		FDrawToRenderTargetContext DrawContext;
+		UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(this, MinimapRenderTarget, Canvas, CanvasSize, DrawContext);
+		if (Canvas)
+		{
+			const FVector2D DotSize(CanvasUnitDotSize, CanvasUnitDotSize);
+			const FVector2D HalfDotSize = DotSize * 0.5f;
+			for (const FMinimapCanvasDot& Dot : CanvasDots)
+			{
+				Canvas->K2_DrawBox(Dot.Position - HalfDotSize, DotSize, CanvasUnitDotSize, Dot.Color);
+			}
+		}
+		UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(this, DrawContext);
+	}
+	DrawStats.DrawRenderTargetMs = static_cast<float>((FPlatformTime::Seconds() - DrawStartTime) * 1000.0);
+	DrawStats.TotalMs = static_cast<float>((FPlatformTime::Seconds() - TotalStartTime) * 1000.0);
+	MinimapDataSubsystem->RecordMinimapDrawPerfStats(DrawStats);
 }

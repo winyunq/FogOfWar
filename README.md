@@ -1,220 +1,176 @@
-# Winyunq FogOfWar High-Performance Architecture
+# FogOfWar
 
-本项目是专为 **MassBattleFrame** 设计的高性能战争迷雾解决方案。它利用 Mass Entity System (ECS) 的数据驱动特性和 Sparse Hash Grid（稀疏哈希网格）技术，旨在支持 4096*4096 甚至更大的超大规模地图。
+MassBattle-oriented fog of war and minimap plugin for RTS projects.
 
-## 1. 核心架构设计
+This branch is the MassBattle integration branch. It reads MassBattle runtime data directly, especially `FLocating`, `FTeam`, and `UMassBattleHashGridSubsystem`, instead of maintaining a second unit registry.
 
-### 1.1 MassBattle 核心组件集成 (Core MassBattle Integration)
+## Dependencies
 
-本插件的设计哲学是 **"Follower Architecture" (跟随者架构)**。我们不创造新的世界真理，而是从 MassBattle 中读取真理。以下是 FogOfWar 深度依赖的 MassBattle 核心组件及其数据定义：
+The plugin currently depends on these open-source project plugins:
 
-1.  **位置源 (Position Source) - `FLocating`**
-    *   **定义**: `Fragments/Transform.h`
-    *   **C++ 结构**:
-        ```cpp
-        USTRUCT(BlueprintType)
-        struct MASSBATTLE_API FLocating : public FA_MassBattleBaseFragment
-        {
-            GENERATED_BODY()
-            // Units location. This is the TRUTH we read.
-            UPROPERTY(...)
-            FVector Location = FVector::ZeroVector; 
-            ...
-        };
-        ```
-    *   **作用**: FogOfWar 每一帧读取此 `Location` 来计算单位在 World Partition Grid 中的索引。
+- `MassBattle`
+- `MassBattleMinimap`
+- `OpenRTSCamera`
 
-2.  **阵营源 (Faction Source) - `FTeam`**
-    *   **定义**: `Fragments/Team.h`
-    *   **C++ 结构**: `struct FTeam { int32 index; }`
-    *   **自定义关系 (Relationship Strategy)**:
-        *   我们**不硬编码** `TeamA == TeamB`。
-        *   **解决方案**: FogOfWar 将暴露一个 **可绑定的静态委托 (Static Delegate)** 或 **宏 (Macro)** 接口：
-            ```cpp
-            // FTeamRelationshipResolver::IsAlly(int32 ObserverTeam, int32 TargetTeam)
-            // 默认实现: return ObserverTeam == TargetTeam;
-            // 用户重写: return (ObserverTeam & TargetTeam) != 0; // 举例：位运算同盟
-            ```
-        *   这允许用户用任意逻辑（位掩码、查表、异或）来定义“谁能共享视野”。
+It also uses Unreal Engine Mass modules and standard engine plugins/modules:
 
-3.  **核心数据源 (Core Data Source) - Spatial Hashing**
-    *   **定义**: `MassBattleHashGridSubsystem`
-    *   **机制**:
-        *   这也是我们的**唯一真理来源**。FogOfWar **不会**去遍历 `FMassEntityManager` 中的 Entity 列表（那太慢了）。
-        *   **Spatial Hashing**: MassBattle 将无限的世界切分为 `300cm x 300cm` 的 `Cell`，每 `16x16x16` 个 Cell 组成一个 `Block`。
-        *   **Sparse Iteration (稀疏遍历)**:
-            *   对于小地图 (Minimap) 和迷雾，我们需要的数据就在 `FHashGridAgentCell` 中。
-            *   **极速访问**: 我们只需要遍历玩家视野覆盖的那些 Block (约 16x16 = 256 个 Block)，就能获取所有相关单位的信息。
-            *   **直接访问**: 通过 `MassBattleHashGrid->GetAgentCellAt(Coord)`，我们可以直接拿到紧凑排列的单位数组，这是 CPU 缓存极其友好的。
+- `MassGameplay`
+- `MassEntity`, `MassCommon`, `MassMovement`, `MassSpawner`, `MassRepresentation`, `MassSignals`, `MassLOD`
+- `EnhancedInput`
+- `UMG`, `Slate`, `SlateCore`, `RHI`, `RenderCore`
 
-### 1.2 核心流程 (Core Process Flow)
+The declared plugin dependencies are in `FogOfWar.uplugin`. If you want to use FogOfWar without MassBattle, change `Source/FogOfWar/Public/FogOfWarMassBinding.h` to bind to your own location/team fragments or to the fallback fragments, and remove the MassBattle-specific Build.cs/uplugin dependencies.
 
-既然 `MassBattleFrame` 是不可修改的宿主 (Immutable Host)，我们的插件是一个增强模块。以下流程图展示了 `FogProcessor` 如何从 MassBattle 中**提取**所需数据并**处理**成迷雾。
+## Quick Start
 
-```mermaid
-graph TD
-    subgraph MassBattleFrame ["MassBattleFrame (Immutable Host)"]
-        direction TB
-        HashGrid[MassBattleHashGrid]
-        
-        subgraph EntityFragments ["Entity Data Fragments"]
-            Loc[FLocating]
-            Team[FTeam]
-            Vision[FMassVisionFragment]
-        end
-    end
+### 1. Enable dependencies
 
-    subgraph FogOfWarPlugin ["FogOfWar (Extension)"]
-        direction TB
-        Interface[IFogGridProvider]
-        TeamLogic[FTeamResolver Delegate]
-        Processor[Fog Processor]
-        Output[Fog Texture / Buffer]
-    end
+Place the dependency plugins next to this plugin or enable them in the host project. Then enable `FogOfWar` in the `.uproject`.
 
-    %% 1. 空间查询
-    HashGrid -.->|Implements| Interface
-    Interface -->|1. Get Occupied Blocks| Processor
-    
-    %% 2. 数据读取
-    Processor -->|2. Query Entity Data| EntityFragments
-    EntityFragments -.->|Return Location| Loc
-    EntityFragments -.->|Return SightRadius| Vision
-    
-    %% 3. 逻辑判断
-    Processor -->|3. Check Logic| TeamLogic
-    TeamLogic -.->|Read Index| Team
-    
-    %% 4. 写入结果
-    TeamLogic -->|Is Ally?| Processor
-    Processor -->|4. Rasterize Vision| Output
-```
+### 2. Scene fog
 
-### 1.2 核心理念: 强依赖与直接调用 (Direct Dependency)
+Add an `AFogOfWar` actor to the level.
 
-**拒绝中间层，拒绝数据同步。**
+Set these properties:
 
-*   **现状**: `MassBattleFrame` 已经拥有完美空间索引的 `MassBattleHashGrid`。
-*   **错误做法**: 创建一个 `FogIntegration` 层，把 Mass 的数据 Copy 一份传给 Fog。
-*   **正确做法**: `FogOfWar` **强依赖** `MassBattle`。
-    *   **Direct Call**: 迷雾系统直接调用 `MassBattleHashGridSubsystem->GetAgentGrid()`。
-    *   **Zero Copy**: 不需要维护任何“迷雾单位列表”。数据源永远只有一个：`MassBattleHashGrid`。
+- `GridVolume`: a volume covering the playable battlefield.
+- `InterpolationMaterial`
+- `AfterInterpolationMaterial`
+- `SuperSamplingMaterial`
+- `PostProcessingMaterial`
+- `bAutoActivate = true`
 
-#### 1.3.1 输入接口 (Input API)
-*   **显式启动**: `UFogOfWarSubsystem::Get(World)->StartFogOfWar(Config)`
-*   **配置**: 传入 `UFogOfWarConfig` 或直接使用 MassBattle 的配置。
+MassBattle agents are auto-bound when `UMinimapDataSubsystem::bAutoBindMassBattleAgents` is true. The default auto-bound values are:
 
-### 1.3 核心战略: 剥削 MassBlock (Exploiting Mass Structure)
+- `DefaultMassBattleSightRadius`
+- `DefaultMinimapUnitPixelRadius`
+- `TeamColors`
 
-这不再是一个“移植”问题，而是一个 **“挂载”** 问题。我们将迷雾计算 **挂载** 在 `MassBattleHashGrid` 的既有结构上。
+For explicit per-archetype setup, add `UMassVisionTrait` to the Mass agent config and set:
 
-#### 1.3.1 既有结构 (The Existing Structure)
-`MassBattleHashGrid` 已经在内存中维护了 **16x16x16** 的 `Block` 结构 (LOD2)。
-*   这是事实标准，不需要我们重新划分。
-*   内存中已有 `TMap<FIntVector, TSharedPtr<FAgentGridBlock>> AgentGrid`。
+- `SightRadius`
+- `bShouldBeRepresentedOnMinimap`
+- `MinimapIconColor`
+- `MinimapIconSize`
 
-#### 1.3.2 直接访问 (Direct Access Strategy)
-*   **小地图更新**:
-    1.  `FogOfWar` 想要更新某个区域？直接计算出对应的 `Block Coordinate`。
-    2.  直接指针访问: `MassBattleHashGrid->AgentGrid.Find(BlockCoord)`。
-    3.  **如果指针为空**: 证明该区域无单位，直接跳过 (Cost = 0)。
-    4.  **如果指针存在**: 直接遍历 Block 内的 `Cells` 获取视野半径。
+### 3. Minimap widget
 
-#### 1.3.3 真正的零开销 (True Zero Overhead)
-*   我们不创建新网格。
-*   我们不复制单位数据。
-*   我们甚至不遍历 Entity Array，而是直接读 HashGrid 的内存热区。
+Create a UMG widget derived from `UMinimapWidget`.
 
+In the widget:
 
-#### 1.3.3 输出接口 (Output Usage)
-(输出到材质部分的逻辑保持不变，材质依然采样这张通过差分同步更新的 Texture)
-```hlsl
-// HLSL 采样逻辑同上...
-```
+- Add an `Image` named `MinimapImage`.
+- Assign `MinimapMaterial`.
+- Set `TextureResolution` if the default `256x256` is not enough.
+- Add the widget to the viewport like any other UMG widget.
 
-### 1.4 深度集成 (Deep Integration)
+`UMinimapWidget` creates its own render target and binds it to `MinimapImage`. It also drives `UMinimapDataSubsystem::UpdateMinimapFromHashGrid`, so no separate unit list is required.
 
-为了贯彻 "如无必要，勿增实体" 的原则，我们将直接利用 MassBattle 的现有资产：
-...
-
-## 2. 数据流 (Data Flow)
-
-### 2.1 架构概览 (Architecture Overview)
-
-为了让您对各个类及其职责一目了然，我们整理了以下架构表：
-
-| Class (类名)                    | Function (函数/职责)                              | File Location (文件路径) | Description (说明)                                             |
-| :------------------------------ | :------------------------------------------------ | :----------------------- | :------------------------------------------------------------- |
-| **AFogOfWar**                   | `UpdateVisibilities`<br>`ResetCachedVisibilities` | `Core/`                  | **真理管理者**。执行核心 DDA 算法，维护全局 `FTile` 计数网格。 |
-| **UVisionProcessor**            | `Execute`                                         | `Processors/`            | **Mass 驱动器**。监听位置变化，驱动增量更新逻辑。              |
-| **MinimapDataSubsystem**        | `UpdateVisionGrid`                                | `Integration/`           | **数据中转**。存储小地图图层数据，管理坐标转换。               |
-| **FMassVisionFragment**         | N/A (Data)                                        | `Fragments/`             | **配置数据**。存储单位视野半径、颜色等。                       |
-| **FMassPreviousVisionFragment** | N/A (Cache)                                       | `Fragments/`             | **局部更新缓存**。存储上一帧视野状态，用于“擦除”旧视野。       |
-
-### 2.2 目录结构 (File Structure)
-
-基于 Winyunq 风格与分层解耦原则，我们将插件源码划分为以下核心模块：
+The minimap material receives these parameters:
 
 ```text
-Plugins/FogOfWar/Source/FogOfWar/
-├── Core/           # 真理层：AFogOfWar, DDA算法。核心可见性计算。
-├── Processors/     # 驱动层：MassFogOfWarProcessors。监听 Mass 移动并驱动更新。
-├── Fragments/      # 数据层：MassFogOfWarFragments。定义视野与缓存组件。
-├── Integration/    # 桥接层：MinimapDataSubsystem。中转 2D 数据供 UI 消费。
-├── UI/             # 合成层：MinimapWidget。利用材质进行多层“交并”显示。
-└── Utils/          # 工具层：网格映射、坐标转换原子逻辑。
+VisionDataTexture / VisionSourceDataTexture: (WorldX, WorldY, Reserved, SightRadiusWorld)
+IconDataTexture / UnitLocationDataTexture:   (WorldX, WorldY, IconPixelRadius, Reserved)
+IconColorTexture / UnitColorDataTexture:     unit color
+NumberOfVisionSources
+NumberOfUnits
+GridBottomLeftWorldLocation
+GridSize / GridWorldSize
+UnitSize
 ```
 
-### 2.3 初始化阶段 (Initialization)
-1.  **配置**: 开发者在 `MassAgentConfig` 中为实体添加 `FMassVisionFragment`。
-2.  **生成**: Mass 自动注入 `FMassPreviousVisionFragment` 作为增量更新的缓存。
-3.  **激活**: 通过 `StartFogOfWar` 初始化全局 `AFogOfWar` 管理器。
+The minimap draws one representative icon per occupied minimap presentation sample. This is deliberate: the minimap is a low-resolution UI layer, not the authoritative scene fog model.
 
-### 2.4 运行时更新 (Runtime Update)
+## Updating the Scene Fog Material
 
-1.  **游戏迷雾 (High Frequency)**: 相机移动 -> 查询 `HashGrid` 周边 Block -> 更新材质参数 (Viewport Rect)。
-2.  **小地图 (Low Frequency)**: 定时器/事件驱动 -> 遍历 256 个缓存 Block -> 多线程 DDA 更新 FTile 网格 -> 写入小地图纹理。
+Scene fog and minimap fog are separate systems.
 
+For the main camera, the CPU uploads a compact list of circular vision sources to the post-process material:
 
-## 3. 性能目标 (Performance Goals)
+```text
+FOW_SceneGpuVisionSourceTexture: (WorldX, WorldY, SightRadius, Reserved)
+FOW_SceneGpuVisionSourceCount
+FOW_EnableSceneGpuVisionSources
+```
 
-*   **内存占用**: 仅随活跃区域线性增长，而非随地图尺寸平方增长。
-*   **CPU消耗**: 利用 Mass 的多线程 Processor，并行计算每个 Block 的视野更新。
-*   **扩展性**: 理论支持无限大地图，仅受限于内存总量。
+Update `PostProcessingMaterial` so it:
 
-## 4. 迁移指南 (Migration Guide)
+1. Reconstructs or reads the current pixel world position in XY.
+2. If `FOW_EnableSceneGpuVisionSources > 0`, loops from `0` to `FOW_SceneGpuVisionSourceCount - 1`.
+3. Reads each source from `FOW_SceneGpuVisionSourceTexture`.
+4. Uses circular visibility:
 
-如果您是从旧版 FogOfWar 迁移而来：
-*   ❌ **移除**: 不要再给 Actor 添加 `VisionComponent`。
-*   ✅ **配置**: 直接在 MassBattle 的 DataAsset 中配置 Vision 属性。
-*   ✅ **依赖**: 确保您的 `MassBattleFrame` 插件正确依赖了本插件。
+```hlsl
+float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
+float2 Delta = CurrentPixelWorldXY - Source.xy;
+bool bVisible = dot(Delta, Delta) <= Source.z * Source.z;
+```
 
-## 5. 当前版本使用方式（屏幕后处理 + 小地图）
+5. Applies fog only when no circle covers the pixel.
 
-### 5.1 玩家主画面迷雾（后处理）
-本插件当前采用**对玩家看到的场景进行后处理**的方式输出迷雾效果。
-你需要在关卡里放置并配置 `AFogOfWar`：
+Do not use AABB as the final reveal shape. Bounds are only used on the CPU as a broad-phase HashGrid query window. The final scene reveal shape is circular.
 
-1. 放置 `AFogOfWar` Actor，并设置 `GridVolume`。
-2. 配置材质：`InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`PostProcessingMaterial`。
-3. 保持 `bAutoActivate=true`（或在运行时手动调用 `Activate`）。
-4. 在 Mass 实体原型上添加 `UMassVisionTrait`，给单位配置 `SightRadius`（大于 0）。
+For a soft edge, replace the boolean test with a smooth falloff:
 
-> 分辨率控制：通过 `AFogOfWar::TileSize` 控制高精度迷雾网格密度。
-> `TileSize` 越小，精度越高、开销越大。
+```hlsl
+float Dist = length(CurrentPixelWorldXY - Source.xy);
+float Visibility = 1.0 - smoothstep(Source.z - EdgeWidth, Source.z, Dist);
+```
 
-### 5.2 小地图
-小地图走 `UMinimapDataSubsystem::UpdateMinimapFromHashGrid` 路径（HashGrid 降采样），`UMinimapWidget` 会在 Tick 中触发更新。
+For temporal smoothing, blend the resulting visibility with a previous visibility/history render target or the existing interpolation pass. Keep the source data circular.
 
-1. 确保 `UMinimapWidget` 设置了 `MinimapMaterial`。
-2. 通过 `TextureResolution` 配置小地图分辨率（默认 256x256）。
-3. 单位需带 `UMassVisionTrait` 且 `bShouldBeRepresentedOnMinimap=true`。
+## Important Settings
 
-### 5.3 常见故障排查
+`AFogOfWar`:
 
-如果出现“有后处理材质但迷雾不更新”，优先检查：
+- `MaxSceneGpuVisionSources`: upload limit for the scene post-process material.
+- `bCullSceneGpuVisionSourcesToCamera`: collect only sources near the current camera ground quadrilateral.
+- `SceneGpuVisionCullPadding`: extra camera-edge padding.
+- `SceneGpuVisionSourceSearchPadding`: must be at least the largest expected sight radius, otherwise off-camera large vision sources can be missed.
+- `SceneGpuVisionQueryZHalfRange`: Z range used when querying the 3D MassBattle HashGrid.
 
-1. 是否有 `AFogOfWar` 且已激活。
-2. 视野单位是否带 `UMassVisionTrait` 且 `SightRadius > 0`。
-3. `GridVolume` 是否覆盖实际战场区域。
-4. 材质参数名是否与插件中使用的参数一致（`FOW_*`）。
+`UMinimapDataSubsystem`:
+
+- `bAutoBindMassBattleAgents`
+- `DefaultMassBattleSightRadius`
+- `DefaultMinimapUnitPixelRadius`
+- `bEncodeMinimapVisionSources`
+- `TeamColors`
+- `bEnableMinimapPerformanceStats`
+
+`UMinimapWidget`:
+
+- `TextureResolution`
+- `UpdateInterval`
+- `MaxUnits`
+- `bEncodeUnitsIntoMinimapMaterial`
+- `bDrawUnitsWithCanvasOverlay`
+
+## Debugging
+
+Enable minimap performance logs with:
+
+```text
+UMinimapDataSubsystem::bEnableMinimapPerformanceStats = true
+```
+
+Typical log categories:
+
+```text
+[MinimapPerf][HashGridRead]
+[MinimapPerf][Draw]
+```
+
+Use these logs to distinguish HashGrid traversal cost, texture upload cost, render-target draw cost, and number of represented units.
+
+## Architecture Rules
+
+- `FLocating` is the MassBattle authoritative location fragment.
+- Do not read `FTransformFragment` for MassBattle agents.
+- Do not maintain a second authoritative FogOfWar unit list.
+- Do not use minimap presentation data as scene fog source data.
+- Scene fog final visibility is circular.
+- AABB/bounds are broad-phase CPU query helpers only.
+- Team color should be indexed through `TeamColors[TeamId]`, not repeated if/switch logic.
+
+See `ARCHITECTURE_MEMORY.md` for integration notes and pitfalls.

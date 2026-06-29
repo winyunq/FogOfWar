@@ -8,6 +8,8 @@
 #include "MassEntitySubsystem.h"
 #include "MassFogOfWarFragments.h"
 #include "DrawDebugHelpers.h"
+#include "HAL/PlatformTime.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -18,6 +20,16 @@ namespace
 	{
 		if (Resolution.X <= 0) Resolution.X = DefaultMinimapResolution;
 		if (Resolution.Y <= 0) Resolution.Y = DefaultMinimapResolution;
+	}
+
+	FORCEINLINE float SecondsToMs(const double Seconds)
+	{
+		return static_cast<float>(Seconds * 1000.0);
+	}
+
+	FORCEINLINE float CyclesToMs(const uint64 Cycles)
+	{
+		return static_cast<float>(FPlatformTime::ToMilliseconds64(Cycles));
 	}
 }
 
@@ -219,7 +231,13 @@ void UMinimapDataSubsystem::InitMinimapGrid(const FVector2D& InGridOrigin, const
 
 void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, int32 BlockRadius)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE_STR("Minimap.UpdateFromHashGrid");
+
 	if (!GetWorld()) return;
+	const double TotalStartTime = FPlatformTime::Seconds();
+	const bool bCollectStats = bEnableMinimapPerformanceStats;
+	const bool bCollectDetailedStats = bCollectStats && bEnableDetailedMinimapPerformanceStats;
+	FMinimapHashGridPerfStats Stats;
 	
 	// Zero Overhead Check: If Minimap hasn't been initialized (TileSize is Zero), do nothing.
 	if (MinimapTileSize.X <= 0 || MinimapTileSize.Y <= 0)
@@ -231,6 +249,11 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld());
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
 	if (!HashGrid || !EntitySubsystem) return;
+	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
+
+	Stats.HashGridBlocks = HashGrid->AgentGrid.Num();
+	Stats.AgentCellSize = HashGrid->AgentCellSize;
+	Stats.AgentBlockDimensions = HashGrid->AgentBlockDimensionsCache;
 
 	// 2. 清空并重置小地图数据
 	// ResetAllTiles is not exposed, so we iterate. 
@@ -240,13 +263,16 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	if (TotalTiles == 0) return;
 
 	// ParallelFor could be used here for clearing if needed, but simple loop is safer for now.
+	const double ClearStartTime = FPlatformTime::Seconds();
 	for (FMinimapTile& Tile : MinimapTiles)
 	{
 		Tile.UnitCount = 0;
 		Tile.MaxSightRadius = 0.0f;
 		Tile.MaxIconSize = 0.0f;
+		Tile.RepresentativeInfluence = -FLT_MAX;
 		Tile.Color = FLinearColor::Transparent;
 	}
+	Stats.ClearTilesMs = SecondsToMs(FPlatformTime::Seconds() - ClearStartTime);
 
 	// 3. 准备坐标转换参数 (Cache for performance)
 	const FVector2D GridOrigin = GridBottomLeftWorldLocation;
@@ -254,33 +280,29 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	const FIntPoint MapRes = MinimapGridResolution;
 	const FVector2D TileSize = MinimapTileSize;
 	
-	// Debug Stats
-	int32 ActiveBlocks = 0;
-	int32 ActiveCells = 0;
-	int32 TotalAgentsFound = 0;
-	int32 AgentsWithFragment = 0;
-	int32 SkippedOutOfBounds = 0;
 	FVector FirstAgentLoc = FVector::ZeroVector;
 
 	// 4. LOD2 - 遍历所有活跃的 Block (Active Blocks)
+	const double TraverseStartTime = FPlatformTime::Seconds();
 	for (auto It = HashGrid->AgentGrid.CreateConstIterator(); It; ++It)
 	{
-		ActiveBlocks++;
 		const FIntVector& BlockCoord = It.Key();
 		const TSharedPtr<FAgentGridBlock>& Block = It.Value();
 
 		if (!Block.IsValid()) continue;
+		Stats.ValidBlocks++;
 
 		const FIntVector BlockBaseGlobalCellCoord = BlockCoord * HashGrid->AgentBlockDimensionsCache;
 
 		// 5. LOD1 - 遍历 Block 内的活跃 Cell (Occupied Cells)
 		for (TConstSetBitIterator<> CellIt(Block->OccupiedCells.OccupiedCellBitArray); CellIt; ++CellIt)
 		{
-			ActiveCells++;
+			Stats.OccupiedCells++;
 			const int32 CellIndex = CellIt.GetIndex();
 			const FHashGridAgentCell& Cell = Block->Cells[CellIndex];
 
 			if (Cell.Agents.Num() == 0) continue;
+			Stats.NonEmptyCells++;
 
 			// ... (Coord calc same as before)
 			const int32 DimX = HashGrid->AgentBlockDimensionsCache.X;
@@ -297,19 +319,20 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 			// 6. LOD0 - 遍历 Cell 内的 Agent
 			for (const FAgentGridData& AgentData : Cell.Agents)
 			{
-				TotalAgentsFound++;
+				Stats.AgentsVisited++;
 				const FVector AgentWorldPos = CellCenterWorld + AgentData.GetRelativeLocation();
 
-				if (TotalAgentsFound == 1) FirstAgentLoc = AgentWorldPos;
+				if (Stats.AgentsVisited == 1) FirstAgentLoc = AgentWorldPos;
 
 				const float RelX = AgentWorldPos.X - GridOrigin.X;
 				const float RelY = AgentWorldPos.Y - GridOrigin.Y;
 
 				if (RelX < 0 || RelY < 0 || RelX >= GridSizeVal.X || RelY >= GridSizeVal.Y) 
 				{
-					SkippedOutOfBounds++;
+					Stats.SkippedOutOfBounds++;
 					continue;
 				}
+				Stats.AgentsInBounds++;
 
 				const int32 TileX = FMath::FloorToInt(RelX / TileSize.X);
 				const int32 TileY = FMath::FloorToInt(RelY / TileSize.Y);
@@ -318,47 +341,129 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 				{
 					const int32 TileIndex = TileX * MapRes.Y + TileY;
 
-					FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-
 					// HashGrid 不与 Mass Entity 生命周期同步，Entity 可能已被销毁
 					// 必须在访问任何 Fragment 前检查，否则触发 IsEntityValid 断言崩溃
-					if (!EntityManager.IsEntityValid(AgentData.EntityHandle)) continue;
+					Stats.EntityValidationChecks++;
+					const uint64 ValidationStartCycles = bCollectDetailedStats ? FPlatformTime::Cycles64() : 0;
+					const bool bEntityValid = EntityManager.IsEntityValid(AgentData.EntityHandle);
+					if (bCollectDetailedStats)
+					{
+						Stats.EntityValidationMs += CyclesToMs(FPlatformTime::Cycles64() - ValidationStartCycles);
+					}
+					if (!bEntityValid)
+					{
+						Stats.InvalidEntities++;
+						continue;
+					}
 
 					FMinimapTile& MiniTile = MinimapTiles[TileIndex];
 					MiniTile.UnitCount++;
+					Stats.MinimapCellsWritten++;
 					
-					// Fallback defaults come from MassBattle data, so plain Battle agents
-					// remain visible even before a custom minimap representation is added.
+					// Fallback defaults come from MassBattle's own unit size fragments.
+					const uint64 FragmentStartCycles = bCollectDetailedStats ? FPlatformTime::Cycles64() : 0;
 					const FOW_TEAM_FRAGMENT* TeamFrag = EntityManager.GetFragmentDataPtr<FOW_TEAM_FRAGMENT>(AgentData.EntityHandle);
+					Stats.FragmentDataPtrCalls++;
 					FLinearColor IconColor = TeamFrag ? GetTeamColor(FOW_GET_TEAM_INDEX(*TeamFrag)) : DefaultTeamColor;
-					float IconSize = DefaultMassBattleMinimapIconSize;
+					float IconSize = DefaultMinimapUnitPixelRadius;
 
 					if (const FMassMinimapRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassMinimapRepresentationFragment>(AgentData.EntityHandle))
 					{
-						AgentsWithFragment++;
+						Stats.AgentsWithRepresentationFragment++;
 						IconColor = RepFrag->IconColor;
 						IconSize = RepFrag->IconSize;
 					}
-					
-					MiniTile.Color = IconColor;
-					MiniTile.MaxIconSize = FMath::Max(MiniTile.MaxIconSize, IconSize);
+					Stats.FragmentDataPtrCalls++;
 
+					float SightRadius = DefaultMassBattleSightRadius;
 					if (const FMassVisionFragment* VisionFrag = EntityManager.GetFragmentDataPtr<FMassVisionFragment>(AgentData.EntityHandle))
 					{
-						MiniTile.MaxSightRadius = FMath::Max(MiniTile.MaxSightRadius, VisionFrag->SightRadius);
+						Stats.AgentsWithVisionFragment++;
+						SightRadius = VisionFrag->SightRadius;
+					}
+					Stats.FragmentDataPtrCalls++;
+
+					MiniTile.MaxSightRadius = FMath::Max(MiniTile.MaxSightRadius, SightRadius);
+					const float Influence = SightRadius;
+					if (Influence >= MiniTile.RepresentativeInfluence)
+					{
+						MiniTile.RepresentativeInfluence = Influence;
+						MiniTile.Color = IconColor;
+						MiniTile.MaxIconSize = FMath::Max(0.0f, IconSize);
+					}
+					if (bCollectDetailedStats)
+					{
+						Stats.FragmentLookupMs += CyclesToMs(FPlatformTime::Cycles64() - FragmentStartCycles);
 					}
 				}
 			}
 		}
 	}
+	Stats.TraverseHashGridMs = SecondsToMs(FPlatformTime::Seconds() - TraverseStartTime);
+	Stats.EstimatedTraversalAndProjectionMs = FMath::Max(0.0f, Stats.TraverseHashGridMs - Stats.EntityValidationMs - Stats.FragmentLookupMs);
+	Stats.TotalMs = SecondsToMs(FPlatformTime::Seconds() - TotalStartTime);
+	LastHashGridPerfStats = Stats;
 	
-	// Explicitly Log Stats every second
-	static double LastLogTime = 0.0f;
-	const double CurrentTime = GetWorld()->GetTimeSeconds();
-	if (CurrentTime - LastLogTime > 2.0f)
+	if (bCollectStats)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[MinimapDataSubsystem] Blocks: %d, Cells: %d, AgentsFound: %d, Skipped(OOB): %d, FirstAgent: %s"), 
-			ActiveBlocks, ActiveCells, TotalAgentsFound, SkippedOutOfBounds, *FirstAgentLoc.ToString());
-		LastLogTime = CurrentTime;
+		const double CurrentTime = GetWorld()->GetTimeSeconds();
+		if (CurrentTime - LastHashGridPerfLogTime >= MinimapPerformanceLogInterval)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("[MinimapPerf][HashGridRead] Total=%.3fms Clear=%.3fms TraverseAll=%.3fms TraverseEst=%.3fms EntityValid=%.3fms FragLookup=%.3fms Detailed=%d Blocks=%d ValidBlocks=%d OccCells=%d NonEmpty=%d Agents=%d InBounds=%d OOB=%d InvalidEnt=%d FragCalls=%d Rep=%d Vision=%d Writes=%d AgentCell=%s BlockDim=%s First=%s"),
+				Stats.TotalMs,
+				Stats.ClearTilesMs,
+				Stats.TraverseHashGridMs,
+				Stats.EstimatedTraversalAndProjectionMs,
+				Stats.EntityValidationMs,
+				Stats.FragmentLookupMs,
+				bCollectDetailedStats ? 1 : 0,
+				Stats.HashGridBlocks,
+				Stats.ValidBlocks,
+				Stats.OccupiedCells,
+				Stats.NonEmptyCells,
+				Stats.AgentsVisited,
+				Stats.AgentsInBounds,
+				Stats.SkippedOutOfBounds,
+				Stats.InvalidEntities,
+				Stats.FragmentDataPtrCalls,
+				Stats.AgentsWithRepresentationFragment,
+				Stats.AgentsWithVisionFragment,
+				Stats.MinimapCellsWritten,
+				*Stats.AgentCellSize.ToString(),
+				*Stats.AgentBlockDimensions.ToString(),
+				*FirstAgentLoc.ToString());
+			LastHashGridPerfLogTime = CurrentTime;
+		}
 	}
+}
+
+void UMinimapDataSubsystem::RecordMinimapDrawPerfStats(const FMinimapDrawPerfStats& Stats)
+{
+	LastDrawPerfStats = Stats;
+	if (!bEnableMinimapPerformanceStats || !GetWorld())
+	{
+		return;
+	}
+
+	const double CurrentTime = GetWorld()->GetTimeSeconds();
+	if (CurrentTime - LastDrawPerfLogTime < MinimapPerformanceLogInterval)
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Warning,
+		TEXT("[MinimapPerf][Draw] Total=%.3fms Lock=%.3fms ScanTiles=%.3fms Upload=%.3fms DrawRT=%.3fms SourceTiles=%d ActiveTiles=%d EncodedUnits=%d VisionSources=%d UnitsRepresented=%d MaxStack=%d"),
+		Stats.TotalMs,
+		Stats.LockTexturesMs,
+		Stats.ScanTilesMs,
+		Stats.UploadTexturesMs,
+		Stats.DrawRenderTargetMs,
+		Stats.SourceTilesScanned,
+		Stats.ActiveTiles,
+		Stats.EncodedUnits,
+		Stats.EncodedVisionSources,
+		Stats.TotalUnitsRepresented,
+		Stats.MaxUnitsInSingleTile);
+	LastDrawPerfLogTime = CurrentTime;
 }

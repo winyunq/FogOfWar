@@ -43,11 +43,20 @@ This file records integration decisions and pitfalls that should survive across 
 ## Minimap Fog
 
 - The minimap should be low-frequency and UI-driven or subsystem-driven. It does not need per-frame precision.
+- The minimap is a low-resolution presentation problem. A 256x256 minimap means 65536 presentation samples; calling them tiles/cells is an implementation detail, not the gameplay fog model.
 - The preferred data source is `UMassBattleHashGridSubsystem::AgentGrid`, not a duplicate FogOfWar unit list.
 - `UMinimapWidget` is the place to expose user-facing minimap options such as texture resolution, update interval, max encoded units, and rendering material.
 - Team filtering is not mandatory for the first minimap implementation, but visibility ownership will eventually require a team/alliance resolver.
 - Grid size and origin should be centralized. The intended direction is configuration-driven linkage between MassBattle HashGrid, minimap bounds, and FogOfWar bounds.
 - Team color should be resolved with `TeamColors[TeamId]` through `UMinimapDataSubsystem::GetTeamColor`, not with repeated if/switch chains in hot paths.
+- `FMassMinimapRepresentationFragment::IconSize` is a minimap pixel radius. Do not derive it from `FCollider.Radius * FScaling.Scale` unless an explicit conversion policy exists. Collision radius is a world/physics concept; minimap dots are UI symbols.
+- The minimap material data contract is:
+  - `UnitLocationDataTexture` / `IconDataTexture`: `(WorldX, WorldY, IconPixelRadius, Reserved)`.
+  - `UnitColorDataTexture` / `IconColorTexture`: unit display color.
+  - `VisionSourceDataTexture` / `VisionDataTexture`: `(WorldX, WorldY, Reserved, SightRadiusWorld)`.
+  - `GridWorldSize` / `GridSize` and `GridBottomLeftWorldLocation` define the minimap world rectangle.
+- Minimap tile output is one representative unit per occupied tile. Current representative influence is sight radius; this keeps the current material path bounded by occupied minimap/hash cells rather than raw unit count.
+- The minimap draw layer must not silently clamp every unit icon to a hard-coded minimum size. If a 1px/3px readability floor is needed, expose it as an explicit minimap option; otherwise it hides bad unit-size data and makes MassBattle-derived icon sizes look ineffective.
 - Minimap tile indexing is `Index = X * ResolutionY + Y`. Keep writers and readers aligned with `ConvertMinimapTileIJToWorldLocation_Static`.
 - UMG can initialize before `AFogOfWar::Activate()` syncs final grid bounds. Refresh minimap material grid parameters before drawing instead of assuming one-time initialization order is correct.
 
@@ -56,6 +65,12 @@ This file records integration decisions and pitfalls that should survive across 
 - The current scene fog implementation is CPU tile/DDA based and outputs a post-process visibility texture.
 - Runtime CPU visibility data now lives in `UMinimapDataSubsystem::VisionTiles`; `AFogOfWar` is the rendering/setup adapter, not the authoritative runtime data owner.
 - The desired long-term RTS scene fog is different: camera-visible scene fog should be GPU-driven, using visible allied/friendly units as reveal sources inside the camera region.
+- Scene fog and minimap fog are separate rendering problems. Do not reuse minimap unit/color/tile data as the source for scene post-process fog.
+- `AFogOfWar` owns the scene post-process bridge. It can upload `FOW_SceneGpuVisionSourceTexture` with texels `(WorldX, WorldY, SightRadius, Reserved)`, plus `FOW_SceneGpuVisionSourceCount` and `FOW_EnableSceneGpuVisionSources`. The post-process material can use those sources to decide per scene pixel whether the pixel is covered by a reveal radius.
+- The final scene fog visibility test is circular. AABB/bounds are allowed only as CPU broad-phase query windows for HashGrid and camera-frustum candidate collection; they must not become the final reveal shape.
+- The scene material should evaluate each screen pixel/world position against the uploaded circle sources. Smooth edge/temporal fade belongs in the post-process material or a dedicated GPU history pass, not in minimap compression data.
+- Scene GPU vision source collection should prefer `URTSCamera::minimapFrustumPoints[4]` as the camera ground quadrilateral. HashGrid query bounds must be expanded by a configured max/source search padding so off-camera large vision sources that cover the camera are not missed.
+- Scene GPU source compression is per HashGrid agent cell. Merge all vision sources in a cell into one covering circle centered on the cell center with radius `max(distance(unit, cellCenter) + SightRadius)`. This reduces source count without under-revealing. Do not use the minimap tile cache for scene fog, and do not fall back to a full Mass entity query unless HashGrid is unavailable by design.
 - The CPU tile grid remains useful for minimap/explored state and gameplay queries, but it should not be mistaken for the final high-detail scene fog model.
 
 ## Do Not Rebuild

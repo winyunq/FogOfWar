@@ -239,9 +239,9 @@ struct FOGOFWAR_API FMassMinimapRepresentationFragment : public FMassFragment
     UPROPERTY(EditAnywhere, Category = "Minimap Representation")
     FLinearColor IconColor = FLinearColor::White;
 
-    /// @brief 图标的尺寸（世界单位下的边长）。对于点状图标，可以设为很小的值。
+    /// @brief 图标的小地图像素半径。它不是世界碰撞半径，也不用于揭开战争迷雾。
     UPROPERTY(EditAnywhere, Category = "Minimap Representation")
-    float IconSize = 25.0f;
+    float IconSize = 1.5f;
 
     /// @brief 强度/亮度。可用于在着色器中实现堆叠单位时亮度叠加的效果。
     UPROPERTY(EditAnywhere, Category = "Minimap Representation")

@@ -45,9 +45,121 @@ struct FOGOFWAR_API FMinimapTile
 	UPROPERTY()
 	float MaxSightRadius = 0.0f;
 
-	/** 该瓦片内单位的最大图标尺寸 */
+	/** 该瓦片代表单位的小地图像素半径 */
 	UPROPERTY()
 	float MaxIconSize = 0.0f;
+
+	/** 用于在同一瓦片内挑选代表单位；默认使用视野半径作为影响力 */
+	UPROPERTY()
+	float RepresentativeInfluence = -FLT_MAX;
+};
+
+USTRUCT(BlueprintType)
+struct FOGOFWAR_API FMinimapHashGridPerfStats
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float TotalMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float ClearTilesMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float TraverseHashGridMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float EstimatedTraversalAndProjectionMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float EntityValidationMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float FragmentLookupMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 HashGridBlocks = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 ValidBlocks = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 OccupiedCells = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 NonEmptyCells = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 AgentsVisited = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 AgentsInBounds = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 SkippedOutOfBounds = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 EntityValidationChecks = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 InvalidEntities = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 FragmentDataPtrCalls = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 AgentsWithRepresentationFragment = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 AgentsWithVisionFragment = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 MinimapCellsWritten = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	FVector AgentCellSize = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	FIntVector AgentBlockDimensions = FIntVector(0, 0, 0);
+};
+
+USTRUCT(BlueprintType)
+struct FOGOFWAR_API FMinimapDrawPerfStats
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float TotalMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float LockTexturesMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float ScanTilesMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float UploadTexturesMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	float DrawRenderTargetMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 SourceTilesScanned = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 ActiveTiles = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 EncodedUnits = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 EncodedVisionSources = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 TotalUnitsRepresented = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Performance")
+	int32 MaxUnitsInSingleTile = 0;
 };
 
 /**
@@ -84,6 +196,8 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|Minimap")
 	void UpdateMinimapFromHashGrid(FVector CenterLocation, int32 BlockRadius = 8);
+
+	void RecordMinimapDrawPerfStats(const FMinimapDrawPerfStats& Stats);
 
 	/** 通过 TeamId 数组索引取得颜色，避免在热路径里散落 team if/switch。 */
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "FogOfWar|Team")
@@ -179,7 +293,25 @@ public:
 	float DefaultMassBattleSightRadius = 1024.0f;
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|MassBattle", meta=(ClampMin="0.0", UIMin="0.0"))
-	float DefaultMassBattleMinimapIconSize = 250.0f;
+	float DefaultMinimapUnitPixelRadius = 1.5f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance")
+	bool bEnableMinimapPerformanceStats = true;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance")
+	bool bEnableDetailedMinimapPerformanceStats = false;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance", meta=(ClampMin="0.0", UIMin="0.0"))
+	float MinimapPerformanceLogInterval = 2.0f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Rendering")
+	bool bEncodeMinimapVisionSources = true;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Performance")
+	FMinimapHashGridPerfStats LastHashGridPerfStats;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Performance")
+	FMinimapDrawPerfStats LastDrawPerfStats;
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Team")
 	FLinearColor DefaultTeamColor = FLinearColor::White;
@@ -222,6 +354,9 @@ private:
 private:
 	/** 单例实例指针 */
 	static UMinimapDataSubsystem* SingletonInstance;
+
+	double LastHashGridPerfLogTime = 0.0;
+	double LastDrawPerfLogTime = 0.0;
 };
 
 template<>
