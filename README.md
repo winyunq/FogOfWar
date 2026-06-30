@@ -236,6 +236,7 @@ Content/Core/Materials/M_FogOfWarSuperSampling.uasset
 4. 在 Mass 实体原型上添加 `UMassVisionTrait`，给单位配置 `SightRadius`（大于 0）。
 
 > 当前主画面迷雾走 GPU 圆形视野源后处理路径。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 路径已经移除。
+> `GridVolume` 是可选的。未设置时，`AFogOfWar` 会以自身 Actor 位置为中心，使用 `FallbackGridSize` 作为世界范围，因此蓝图 Actor 可以直接拖入关卡运行。
 
 ### 5.2 小地图
 小地图走 `UMinimapDataSubsystem::UpdateMinimapFromHashGrid` 路径（HashGrid 降采样），`UMinimapWidget` 会在 Tick 中触发更新。
@@ -264,6 +265,8 @@ GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本依赖以
 还依赖 UE 的 Mass、UMG、Slate、RHI、RenderCore、EnhancedInput 等模块；具体以 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs` 为准。
 
 当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。`AFogOfWar` 场景主画面只需要配置 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
+
+FogOfWar 核心模块不强制依赖 `OpenRTSCamera`。`URTSMinimapControllerWidget` 只广播小地图点击/拖动得到的世界坐标；如果项目使用 RTS 相机，请在项目侧或相机插件侧绑定 `OnWorldLocationRequested` 并执行相机跳转。
 
 小地图最简使用方式：
 

@@ -7,7 +7,7 @@
 #include "Subsystems/MinimapDataSubsystem.h" // Needed for FMinimapTile logic if accessed, but mostly for Grid params
 #include "RTSMinimapControllerWidget.generated.h"
 
-class URTSCamera;
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapWorldLocation, const FVector&, WorldLocation);
 
 /**
  * URTSMinimapControllerWidget
@@ -26,7 +26,7 @@ public:
 
 	/** 
 	 * 手动初始化控制器。建议在 NativeConstruct 后调用，或者由外部管理类调用。
-	 * 尝试获取 RTSCamera 和 MinimapDataSubsystem 的参数。
+ * 尝试获取 MinimapDataSubsystem 的参数。
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Minimap|Controller")
 	void InitializeController();
@@ -42,9 +42,6 @@ protected:
 	virtual FReply NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 
 private:
-	/** 尝试查找当前玩家的 RTSCamera 组件 */
-	void FindRTSCamera();
-
 	/** 将世界坐标转换为 Widget 局部坐标 (用于绘制) */
 	FVector2D ConvertWorldToWidgetLocal(const FVector2D& WorldPos, const FVector2D& WidgetSize) const;
 
@@ -61,9 +58,10 @@ protected:
 	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Cache")
 	FVector2D CachedGridSize = FVector2D(1.0f, 1.0f); // Default to non-zero to avoid div/0
 
-	/** 缓存的 RTCamera 引用 */
-	UPROPERTY(Transient, BlueprintReadOnly, Category = "Minimap|Cache")
-	TObjectPtr<URTSCamera> CachedRTSCamera;
+public:
+	/** 点击或拖动小地图时广播世界坐标；相机跳转由项目侧或相机插件侧绑定。 */
+	UPROPERTY(BlueprintAssignable, Category = "Minimap|Controller")
+	FOnMinimapWorldLocation OnWorldLocationRequested;
 
 	/** 是否正在拖动小地图 */
 	bool bIsDragging = false;

@@ -73,10 +73,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	bool bAutoActivate = true;
 
-	/// @brief 定义战争迷雾生效范围的体积（Volume）。
-	/// @details 系统读取此 Volume 的世界范围，作为材质参数和 HashGrid fallback 查询范围。
+	/// @brief 可选：定义战争迷雾生效范围的体积（Volume）。
+	/// @details 未设置时使用 Actor 位置和 FallbackGridSize，保证直接拖入关卡也能运行。
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly)
 	TObjectPtr<AVolume> GridVolume = nullptr;
+
+	/// @brief 未设置 GridVolume 时使用的默认世界范围，以 Actor 位置为中心。
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "FogOfWar|Bounds", meta = (ClampMin = "1.0", UIMin = "1.0"))
+	FVector2D FallbackGridSize = FVector2D(409600.0f, 409600.0f);
 
 	/// @brief 非可见区域的亮度。
 	/// @details 在后期处理材质中，用于控制完全被迷雾覆盖区域的最终显示亮度。

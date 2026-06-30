@@ -7,7 +7,6 @@
 #include "Subsystems/MassBattleHashGridSubsystem.h"
 #include "MassEntitySubsystem.h"
 #include "MassFogOfWarFragments.h"
-#include "RTSSelectionSubsystem.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
@@ -36,6 +35,43 @@ namespace
 	FORCEINLINE float CyclesToMs(const uint64 Cycles)
 	{
 		return static_cast<float>(FPlatformTime::ToMilliseconds64(Cycles));
+	}
+
+	bool IsEntitySelectedByOptionalRtsSubsystem(const ULocalPlayer* LocalPlayer, const FEntityHandle& EntityHandle)
+	{
+		if (!LocalPlayer)
+		{
+			return false;
+		}
+
+		UClass* SelectionSubsystemClass = FindObject<UClass>(nullptr, TEXT("/Script/OpenRTSCamera.RTSSelectionSubsystem"));
+		if (!SelectionSubsystemClass)
+		{
+			return false;
+		}
+
+		ULocalPlayerSubsystem* SelectionSubsystem = LocalPlayer->GetSubsystemBase(SelectionSubsystemClass);
+		if (!SelectionSubsystem)
+		{
+			return false;
+		}
+
+		UFunction* IsEntitySelectedFunction = SelectionSubsystem->FindFunction(TEXT("IsEntitySelected"));
+		if (!IsEntitySelectedFunction)
+		{
+			return false;
+		}
+
+		struct FIsEntitySelectedParams
+		{
+			FEntityHandle Handle;
+			bool ReturnValue = false;
+		};
+
+		FIsEntitySelectedParams Params;
+		Params.Handle = EntityHandle;
+		SelectionSubsystem->ProcessEvent(IsEntitySelectedFunction, &Params);
+		return Params.ReturnValue;
 	}
 
 }
@@ -340,15 +376,12 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
 	if (!HashGrid || !EntitySubsystem) return;
 	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-	URTSSelectionSubsystem* SelectionSubsystem = nullptr;
+	const ULocalPlayer* LocalPlayer = nullptr;
 	if (const UWorld* World = GetWorld())
 	{
 		if (const APlayerController* PlayerController = World->GetFirstPlayerController())
 		{
-			if (const ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer())
-			{
-				SelectionSubsystem = LocalPlayer->GetSubsystem<URTSSelectionSubsystem>();
-			}
+			LocalPlayer = PlayerController->GetLocalPlayer();
 		}
 	}
 	Stats.HashGridBlocks = HashGrid->AgentGrid.Num();
@@ -462,7 +495,7 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 					FMinimapTile& MiniTile = MinimapTiles[TileIndex];
 					MiniTile.UnitCount++;
 					Stats.MinimapCellsWritten++;
-					const bool bSelected = SelectionSubsystem && SelectionSubsystem->IsEntitySelected(AgentData.EntityHandle);
+					const bool bSelected = IsEntitySelectedByOptionalRtsSubsystem(LocalPlayer, AgentData.EntityHandle);
 					const bool bInCombat = AgentData.bIsAttacker != 0;
 					const int32 SelectedBit = static_cast<int32>(bSelected);
 					const int32 CombatBit = static_cast<int32>(bInCombat && bDrawCombatColorThisUpdate);

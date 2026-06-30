@@ -90,7 +90,6 @@ void AFogOfWar::Activate()
 	}
 	bActivated = true;
 
-	checkf(IsValid(GridVolume), TEXT("Volume was not set for the FogOfWar Volume"));
 	checkf(IsValid(PostProcessingMaterial), TEXT("PostProcessingMaterial must be set. GPU FogOfWar uses a single post-process material."));
 
 	Initialize();
@@ -197,25 +196,35 @@ void AFogOfWar::Tick(float DeltaSeconds)
 
 void AFogOfWar::Initialize()
 {
-	if (!IsValid(GridVolume))
-	{
-		GridSize = FVector2D::Zero();
-		GridBottomLeftWorldLocation = FVector2D::Zero();
+	GridSize = FVector2D::ZeroVector;
+	GridBottomLeftWorldLocation = FVector2D::ZeroVector;
 
-		return;
+	if (IsValid(GridVolume))
+	{
+		UBrushComponent* VolumeBrush = GridVolume->GetBrushComponent();
+		if (VolumeBrush)
+		{
+			const FBoxSphereBounds Bounds = VolumeBrush->CalcBounds(VolumeBrush->GetComponentTransform());
+			GridSize = {
+				Bounds.BoxExtent.X * 2,
+				Bounds.BoxExtent.Y * 2
+			};
+			GridBottomLeftWorldLocation = {
+				Bounds.Origin.X - GridSize.X / 2,
+				Bounds.Origin.Y - GridSize.Y / 2
+			};
+		}
 	}
 
-	UBrushComponent* VolumeBrush = GridVolume->GetBrushComponent();
-	FBoxSphereBounds Bounds = VolumeBrush->CalcBounds(VolumeBrush->GetComponentTransform());
+	if (GridSize.X <= 0.0f || GridSize.Y <= 0.0f)
+	{
+		GridSize = FVector2D(FMath::Max(1.0f, FallbackGridSize.X), FMath::Max(1.0f, FallbackGridSize.Y));
+		const FVector Origin = GetActorLocation();
+		GridBottomLeftWorldLocation = FVector2D(Origin.X - GridSize.X * 0.5f, Origin.Y - GridSize.Y * 0.5f);
+		UE_LOG(LogFogOfWar, Log, TEXT("GridVolume is not set. Using fallback bounds centered on actor. Origin=%s Size=%s"),
+			*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString());
+	}
 
-	GridSize = {
-		Bounds.BoxExtent.X * 2,
-		Bounds.BoxExtent.Y * 2
-	};
-	GridBottomLeftWorldLocation = {
-		Bounds.Origin.X - GridSize.X / 2,
-		Bounds.Origin.Y - GridSize.Y / 2
-	};
 	if (UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get())
 	{
 		MinimapSubsystem->SyncWorldBounds(GridBottomLeftWorldLocation, GridSize);

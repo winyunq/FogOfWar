@@ -1,7 +1,6 @@
 // Copyright Winyunq, 2025. All Rights Reserved.
 
 #include "UI/RTSMinimapControllerWidget.h"
-#include "RTSCamera.h"
 #include "Kismet/GameplayStatics.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Components/PanelWidget.h"
@@ -35,41 +34,12 @@ void URTSMinimapControllerWidget::InitializeController()
 		// For now, let's assume valid subsystem or defaults.
 	}
 
-	// 2. Find Camera
-	FindRTSCamera();
-}
-
-void URTSMinimapControllerWidget::FindRTSCamera()
-{
-	if (CachedRTSCamera) return;
-
-	APlayerController* PC = GetOwningPlayer();
-	if (PC)
-	{
-		APawn* Pawn = PC->GetPawn();
-		if (Pawn)
-		{
-			CachedRTSCamera = Pawn->FindComponentByClass<URTSCamera>();
-		}
-		
-		// Fallback: Check Spectator or ViewTarget if needed
-		if (!CachedRTSCamera && PC->GetViewTarget())
-		{
-			CachedRTSCamera = PC->GetViewTarget()->FindComponentByClass<URTSCamera>();
-		}
-	}
 }
 
 void URTSMinimapControllerWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
-	// Retrieve camera if lost (e.g. possessed new pawn)
-	if (!CachedRTSCamera)
-	{
-		FindRTSCamera();
-	}
-	
 	// Force Repaint every frame to show smooth camera movement
 	// UI strictly uses InvalidationPanel usually, but for a high-frequency camera overlay, we might need to verify if this is automatic.
 	// In Slate, Paint is called automatically if invalidated or volatile. 
@@ -81,9 +51,6 @@ int32 URTSMinimapControllerWidget::NativePaint(const FPaintArgs& Args, const FGe
 {
 	// Call Super first (though UserWidget usually doesn't paint much itself)
 	int32 MaxLayerId = Super::NativePaint(Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
-
-	if (!CachedRTSCamera) return MaxLayerId;
-
 	// --- Draw Camera Frustum ---
 	
 	// We need 4 points of the camera view projected onto the ground (Z=0 plane).
@@ -351,10 +318,7 @@ FReply URTSMinimapControllerWidget::NativeOnMouseButtonDown(const FGeometry& InG
 		FVector2D LocalPos = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 		FVector2D WorldPos = ConvertWidgetLocalToWorld(LocalPos, InGeometry.GetLocalSize());
 		
-		if (CachedRTSCamera)
-		{
-			CachedRTSCamera->jumpTo(FVector(WorldPos, 0.0f)); // Z is ignored by JumpTo usually (or handled by camera height)
-		}
+		OnWorldLocationRequested.Broadcast(FVector(WorldPos, 0.0f));
 		
 		return FReply::Handled().CaptureMouse(TakeWidget());
 	}
@@ -378,10 +342,7 @@ FReply URTSMinimapControllerWidget::NativeOnMouseMove(const FGeometry& InGeometr
 		FVector2D LocalPos = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 		FVector2D WorldPos = ConvertWidgetLocalToWorld(LocalPos, InGeometry.GetLocalSize());
 		
-		if (CachedRTSCamera)
-		{
-			CachedRTSCamera->jumpTo(FVector(WorldPos, 0.0f));
-		}
+		OnWorldLocationRequested.Broadcast(FVector(WorldPos, 0.0f));
 		return FReply::Handled();
 	}
 	return FReply::Unhandled();

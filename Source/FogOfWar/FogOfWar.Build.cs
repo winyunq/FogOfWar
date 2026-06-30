@@ -37,8 +37,7 @@ public class FogOfWar : ModuleRules
 				"MassMovement",
 				"MassRepresentation",
 				"MassSignals",
-				"MassSpawner",
-				"OpenRTSCamera"
+				"MassSpawner"
 			}
 			);
 			
