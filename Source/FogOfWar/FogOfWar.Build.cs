@@ -26,26 +26,19 @@ public class FogOfWar : ModuleRules
 			new string[]
 			{
 				"Core",
+				"EnhancedInput",
+				"MassAPI",
+				"MassBattle",
+				"MassBattleMinimap",
+				"MassCommon",
 				"MassCore",
-				"MassEntity", // Moved to Public
-				"MassMovement", // Moved to Public
-				"MassSpawner", // For UMassEntityTraitBase
-				"MassRepresentation", // Needed for FMassVisibilityFragment
-				"MassSignals", // Often used in modern Mass development
-				"MassLOD", // Required for LOD-based culling tags
-				"MassBattleMinimap", // Added for RTS/Mass minimap integration
-				"EnhancedInput", // Required because RTSCamera.h includes InputMappingContext.h
-				"MassCommon", // For Mass types
-				"MassEntity", 
-				"MassMovement", 
-				"MassSpawner", 
-				"MassRepresentation", 
-				"MassSignals", 
-				"MassLOD", 
-				"MassBattle", // Direct Dependency
-				"OpenRTSCamera", 
-				"EnhancedInput", 
-				// ... add other public dependencies that you statically link with here ...
+				"MassEntity",
+				"MassLOD",
+				"MassMovement",
+				"MassRepresentation",
+				"MassSignals",
+				"MassSpawner",
+				"OpenRTSCamera"
 			}
 			);
 			

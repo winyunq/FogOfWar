@@ -227,25 +227,13 @@ struct FOGOFWAR_API FFogOfWarTeamFragment : public FMassFragment
 
 /**
  * @struct FMassMinimapRepresentationFragment
- * @brief 存储单位在小地图上的表示信息。
- * @details 包含了在小地图上绘制单位图标所需的颜色、尺寸等数据。
+ * @brief 旧版小地图表现 Fragment。
+ * @details 运行时小地图颜色和尺寸已改由 UMinimapWidget/UMinimapDataSubsystem 统一配置。
  */
-USTRUCT()
+USTRUCT(meta = (Deprecated = "Use UMinimapWidget team display options instead."))
 struct FOGOFWAR_API FMassMinimapRepresentationFragment : public FMassFragment
 {
     GENERATED_BODY()
-
-    /// @brief 图标在小地图上显示的颜色。
-    UPROPERTY(EditAnywhere, Category = "Minimap Representation")
-    FLinearColor IconColor = FLinearColor::White;
-
-    /// @brief 图标的小地图像素半径。它不是世界碰撞半径，也不用于揭开战争迷雾。
-    UPROPERTY(EditAnywhere, Category = "Minimap Representation")
-    float IconSize = 1.5f;
-
-    /// @brief 强度/亮度。可用于在着色器中实现堆叠单位时亮度叠加的效果。
-    UPROPERTY(EditAnywhere, Category = "Minimap Representation")
-    float Intensity = 1.0f;
 };
 
 /**

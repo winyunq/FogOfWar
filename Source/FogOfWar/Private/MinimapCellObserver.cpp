@@ -18,7 +18,6 @@ void UMinimapCellObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>
 {
 	EntityQuery.AddRequirement<FOW_LOCATION_FRAGMENT>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddRequirement<FMassPreviousMinimapCellFragment>(EMassFragmentAccess::ReadOnly);
-	EntityQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
 	EntityQuery.AddSubsystemRequirement<UMinimapDataSubsystem>(EMassFragmentAccess::ReadOnly);
 	ProcessorRequirements.AddSubsystemRequirement<UMinimapDataSubsystem>(EMassFragmentAccess::ReadOnly);
 }

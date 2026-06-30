@@ -16,7 +16,6 @@
 /// @file FogOfWar.h
 /// @brief 定义了战争迷雾系统的核心Actor AFogOfWar。
 
-// 前向声明
 class UBrushComponent;
 class UTexture2D;
 class AVolume;
@@ -39,14 +38,6 @@ public:
 	AFogOfWar();
 
 public:
-	/** 旧 CPU tile 查询已裁剪；场景可见性由后处理材质按 GPU 圆形源实时判断。 */
-	UFUNCTION(BlueprintCallable, meta=(DeprecatedFunction, DeprecationMessage="GPU 圆形战争迷雾不再维护 CPU tile 可见性查询。"))
-	bool IsLocationVisible(FVector WorldLocation);
-
-	/** 旧 FinalVisibilityTexture 管线已裁剪；保留函数仅避免蓝图引用立刻断裂。 */
-	UFUNCTION(BlueprintPure, meta=(DeprecatedFunction, DeprecationMessage="使用 FOW_SceneGpuVisionSourceTexture 在后处理材质中按圆形源揭雾。"))
-	UTexture* GetFinalVisibilityTexture();
-
 	/**
 	 * @brief       为动态材质实例（MID）设置通用的着色器参数。
 	 * @details     将网格尺寸、分辨率等通用信息传递给指定的MID。
@@ -70,10 +61,6 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar")
 	bool IsActivated() const { return bActivated; }
-
-	/** 旧 tile 管线已裁剪，始终返回 0。 */
-	UFUNCTION(BlueprintCallable, Category = "FogOfWar", meta=(DeprecatedFunction, DeprecationMessage="GPU 圆形战争迷雾不使用 TileSize。"))
-	float GetTileSize() const { return 0.0f; }
 
 public:
 	//~ Begin UPROPERTY Configuration
@@ -108,21 +95,21 @@ public:
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "1", UIMin = "1"))
 	int32 MaxSceneGpuVisionSources = 4096;
 
-	/// @brief 只收集当前玩家镜头地面投影范围附近的视野源；最终揭雾仍由 GPU 按圆形半径判断。
-	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU")
-	bool bCullSceneGpuVisionSourcesToCamera = true;
-
-	/// @brief 镜头投影范围外额外保留的世界距离，避免边缘闪烁。
+	/// @brief 上传给 GPU 的每个视野源额外半径。用于抵消 hash/cell/材质采样边缘误差，避免漏视野。
 	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "0.0", UIMin = "0.0"))
-	float SceneGpuVisionCullPadding = 2048.0f;
+	float SceneGpuVisionSourceRadiusPadding = 300.0f;
 
-	/// @brief HashGrid 查询外扩半径。应不小于项目中最大的场景揭雾半径，以捕捉镜头外覆盖到镜头内的视野源。
-	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "0.0", UIMin = "0.0"))
-	float SceneGpuVisionSourceSearchPadding = 12000.0f;
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Performance")
+	bool bEnableSceneGpuVisionPerformanceStats = true;
 
-	/// @brief 场景 GPU 视野源查询的 Z 半范围，避免在 3D HashGrid 中扫描无关高度层。
-	UPROPERTY(EditAnywhere, Category = "FogOfWar|Scene GPU", meta = (ClampMin = "0.0", UIMin = "0.0"))
-	float SceneGpuVisionQueryZHalfRange = 10000.0f;
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Performance")
+	bool bLogSceneGpuVisionPerformanceToOutputLog = false;
+
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Performance")
+	bool bWriteSceneGpuVisionPerformanceCsv = true;
+
+	UPROPERTY(EditAnywhere, Category = "FogOfWar|Performance", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float SceneGpuVisionPerformanceLogInterval = 2.0f;
 
 	//~ End UPROPERTY Configuration
 
@@ -151,12 +138,6 @@ public:
 
 	/** 更新场景后处理专用的 Mass 视野源纹理。 */
 	void UpdateSceneGpuVisionSourceTexture();
-
-	/** 优先读取 RTSCamera 已计算的地面四点；失败时退回 PlayerController 屏幕角反投影。 */
-	bool TryGetCameraGroundFrustum(FVector2D OutFrustumPoints[4]) const;
-
-	/** 从四点计算当前玩家镜头地面查询窗口，只用于 HashGrid broad-phase，不代表迷雾形状。 */
-	static bool BuildGroundBoundsFromFrustum(const FVector2D FrustumPoints[4], FBox2D& OutBounds);
 	//~ End Core Logic Functions
 
 public:
@@ -183,6 +164,19 @@ public:
 
 	/// @brief 当前已写入 SceneGpuVisionSourceTexture 的视野源数量。
 	int32 SceneGpuVisionSourceCount = 0;
+
+	int32 SceneGpuVisionPerfSampleCount = 0;
+	double SceneGpuVisionPerfLastFlushTime = 0.0;
+	float SceneGpuVisionPerfTotalMsAccum = 0.0f;
+	float SceneGpuVisionPerfCollectMsAccum = 0.0f;
+	float SceneGpuVisionPerfUploadMsAccum = 0.0f;
+	int32 SceneGpuVisionPerfSourceCountAccum = 0;
+	int32 SceneGpuVisionPerfVisitedCellsAccum = 0;
+	int32 SceneGpuVisionPerfVisitedAgentsAccum = 0;
+
+	void RecordSceneGpuVisionPerfStats(float TotalMs, float CollectMs, float UploadMs, int32 VisitedCells, int32 VisitedAgents);
+	void FlushSceneGpuVisionPerfStats(double CurrentTime);
+	void AppendSceneGpuVisionPerfCsvLine(const FString& CsvColumns) const;
 
 	/// @brief 标记系统是否已激活。
 	bool bActivated = false;

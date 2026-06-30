@@ -7,6 +7,15 @@
 #include "Mass/ExternalSubsystemTraits.h"
 #include "MinimapDataSubsystem.generated.h"
 
+UENUM()
+enum class EMinimapUnitDisplayFlags : uint8
+{
+	None = 0,
+	Selected = 1 << 0,
+	Combat = 1 << 1
+};
+ENUM_CLASS_FLAGS(EMinimapUnitDisplayFlags)
+
 /**
  * 代表战争迷雾高精度网格中的单个瓦片。
  */
@@ -52,6 +61,18 @@ struct FOGOFWAR_API FMinimapTile
 	/** 用于在同一瓦片内挑选代表单位；默认使用视野半径作为影响力 */
 	UPROPERTY()
 	float RepresentativeInfluence = -FLT_MAX;
+
+	/** 上一次小地图更新中的颜色，用于按小地图更新频率做低成本过渡/闪烁。 */
+	UPROPERTY()
+	FLinearColor PreviousColor = FLinearColor::Transparent;
+
+	/** 当前瓦片是否包含玩家框选单位。 */
+	UPROPERTY()
+	bool bHasSelectedUnit = false;
+
+	/** 当前瓦片是否包含正在攻击/交战的单位。 */
+	UPROPERTY()
+	bool bHasCombatUnit = false;
 };
 
 USTRUCT(BlueprintType)
@@ -203,6 +224,17 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "FogOfWar|Team")
 	FLinearColor GetTeamColor(int32 TeamIndex) const;
 
+	void SyncMinimapDisplayOptions(
+		const FLinearColor& InDefaultTeamColor,
+		const TArray<FLinearColor>& InTeamColors,
+		bool bInNormalizeTeamColorDirection,
+		float InNormalUnitColorLength,
+		float InSelectedUnitColorLength,
+		const FLinearColor& InCombatUnitColor,
+		bool bInEnableCombatColorFlash,
+		float InCombatColorFlashHz,
+		float InDefaultUnitPixelRadius);
+
 	/**
 	 * 同步战争迷雾高精度网格参数。
 	 * 通常由 AFogOfWar 在初始化后调用，以保证静态坐标转换函数参数有效。
@@ -305,6 +337,12 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance")
 	bool bEnableDetailedMinimapPerformanceStats = false;
 
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance")
+	bool bLogMinimapPerformanceToOutputLog = false;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance")
+	bool bWriteMinimapPerformanceCsv = true;
+
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance", meta=(ClampMin="0.0", UIMin="0.0"))
 	float MinimapPerformanceLogInterval = 2.0f;
 
@@ -317,10 +355,10 @@ public:
 	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Performance")
 	FMinimapDrawPerfStats LastDrawPerfStats;
 
-	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Team")
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
 	FLinearColor DefaultTeamColor = FLinearColor::White;
 
-	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Team")
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
 	TArray<FLinearColor> TeamColors = {
 		FLinearColor(0.45f, 0.45f, 0.45f, 1.0f),
 		FLinearColor(0.10f, 0.72f, 0.18f, 1.0f),
@@ -331,6 +369,48 @@ public:
 		FLinearColor(0.75f, 0.20f, 0.85f, 1.0f),
 		FLinearColor(0.95f, 0.45f, 0.12f, 1.0f)
 	};
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	TArray<FLinearColor> NormalTeamDisplayColors;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	TArray<FLinearColor> SelectedTeamDisplayColors;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	TArray<FLinearColor> TeamDisplayColorsByState;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	FLinearColor DefaultNormalTeamDisplayColor = FLinearColor(0.25f, 0.25f, 0.25f, 1.0f);
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	FLinearColor DefaultSelectedTeamDisplayColor = FLinearColor(0.58f, 0.58f, 0.58f, 1.0f);
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	TArray<FLinearColor> DefaultTeamDisplayColorsByState;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	bool bNormalizeTeamColorDirection = true;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	float NormalUnitColorLength = 0.5f;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	float SelectedUnitColorLength = 1.0f;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	FLinearColor CombatUnitColor = FLinearColor::White;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	bool bEnableCombatColorFlash = false;
+
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
+	float CombatColorFlashHz = 3.0f;
+
+	UPROPERTY(Transient)
+	bool bDrawCombatColorThisUpdate = true;
+
+	void RebuildTeamDisplayColorCache();
+	FLinearColor BuildCachedTeamDisplayColor(const FLinearColor& TeamColor, float TargetLength) const;
 	
 public:
 	//~ Begin Static Vision Grid Conversion Functions
@@ -361,6 +441,16 @@ private:
 
 	double LastHashGridPerfLogTime = 0.0;
 	double LastDrawPerfLogTime = 0.0;
+
+	int32 HashGridPerfSampleCount = 0;
+	FMinimapHashGridPerfStats HashGridPerfAccum;
+	int32 DrawPerfSampleCount = 0;
+	FMinimapDrawPerfStats DrawPerfAccum;
+
+	void RecordHashGridPerfStats(const FMinimapHashGridPerfStats& Stats);
+	void FlushHashGridPerfStats(double CurrentTime);
+	void FlushDrawPerfStats(double CurrentTime);
+	void AppendPerformanceCsvLine(const FString& Channel, const FString& CsvColumns) const;
 };
 
 template<>

@@ -191,24 +191,59 @@ Plugins/FogOfWar/Source/FogOfWar/
 
 ## 5. 当前版本使用方式（屏幕后处理 + 小地图）
 
+### 5.0 当前资产清单
+
+当前 Mass 分支只保留一套主画面迷雾材质和一套小地图材质资产，不再维护旧版多阶段插值/超采样材质链。
+
+保留/新增资产：
+
+```text
+Content/Core/BP_FogOfWar.uasset
+Content/Core/MassBattleFogOfWar.uasset
+Content/Core/Materials/M_FogOfWar.uasset
+Content/Core/Materials/MinimapTarget.uasset
+Content/Core/MiniMap.uasset
+```
+
+已移除的旧材质资产：
+
+```text
+Content/Core/Materials/MF_FogOfWarSampleFinalVisibilityTexture.uasset
+Content/Core/Materials/MF_FogOfWarTileSamplingHelper.uasset
+Content/Core/Materials/M_FogOfWarAfterInterpolation.uasset
+Content/Core/Materials/M_FogOfWarInterpolation.uasset
+Content/Core/Materials/M_FogOfWarPostProcessing.uasset
+Content/Core/Materials/M_FogOfWarSuperSampling.uasset
+```
+
+资产用途：
+
+| Asset | 用途 |
+| :-- | :-- |
+| `BP_FogOfWar` | 可直接放入关卡的战争迷雾 Actor 蓝图，默认绑定当前 GPU 圆形源后处理材质。 |
+| `MassBattleFogOfWar` | MassBattle 集成示例/预设资产，用于项目内快速接入当前 Mass 分支配置。 |
+| `M_FogOfWar` | 主画面战争迷雾后处理材质。读取 `FOW_SceneGpuVisionSourceTexture` 和 `FOW_SceneGpuVisionSourceCount`。 |
+| `MiniMap` | 小地图 Widget/示例资产，配合 `UMinimapWidget` 使用。 |
+| `MinimapTarget` | 小地图材质资产，读取单位位置、单位颜色和视野源数据纹理。 |
+
 ### 5.1 玩家主画面迷雾（后处理）
 本插件当前采用**对玩家看到的场景进行后处理**的方式输出迷雾效果。
 你需要在关卡里放置并配置 `AFogOfWar`：
 
-1. 放置 `AFogOfWar` Actor，并设置 `GridVolume`。
-2. 配置材质：`InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`PostProcessingMaterial`。
+1. 放置 `BP_FogOfWar` 或 `AFogOfWar` Actor。
+2. 配置 `PostProcessingMaterial`，推荐使用 `Content/Core/Materials/M_FogOfWar.uasset`。
 3. 保持 `bAutoActivate=true`（或在运行时手动调用 `Activate`）。
 4. 在 Mass 实体原型上添加 `UMassVisionTrait`，给单位配置 `SightRadius`（大于 0）。
 
-> 分辨率控制：通过 `AFogOfWar::TileSize` 控制高精度迷雾网格密度。
-> `TileSize` 越小，精度越高、开销越大。
+> 当前主画面迷雾走 GPU 圆形视野源后处理路径。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 路径已经移除。
 
 ### 5.2 小地图
 小地图走 `UMinimapDataSubsystem::UpdateMinimapFromHashGrid` 路径（HashGrid 降采样），`UMinimapWidget` 会在 Tick 中触发更新。
 
-1. 确保 `UMinimapWidget` 设置了 `MinimapMaterial`。
+1. 确保 `UMinimapWidget` 设置了 `MinimapMaterial`，推荐使用 `Content/Core/Materials/MinimapTarget.uasset`。
 2. 通过 `TextureResolution` 配置小地图分辨率（默认 256x256）。
 3. 单位需带 `UMassVisionTrait` 且 `bShouldBeRepresentedOnMinimap=true`。
+4. 队伍色、普通/选中亮度和战斗白色由 `UMinimapWidget` 统一配置，运行时同步到 `UMinimapDataSubsystem` 后预计算为颜色查表。
 
 ### 5.3 常见故障排查
 
@@ -216,8 +251,8 @@ Plugins/FogOfWar/Source/FogOfWar/
 
 1. 是否有 `AFogOfWar` 且已激活。
 2. 视野单位是否带 `UMassVisionTrait` 且 `SightRadius > 0`。
-3. `GridVolume` 是否覆盖实际战场区域。
-4. 材质参数名是否与插件中使用的参数一致（`FOW_*`）。
+3. `PostProcessingMaterial` 是否使用当前 `M_FogOfWar`，且材质参数名与插件中使用的参数一致（`FOW_*`）。
+4. `FOW_SceneGpuVisionSourceCount` 是否达到 `MaxSceneGpuVisionSources` 上限；达到上限时，超出的视野源不会上传。
 
 ### 5.4 Mass 分支补充说明
 
@@ -225,11 +260,10 @@ GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本依赖以
 
 1. `MassBattle`
 2. `MassBattleMinimap`
-3. `OpenRTSCamera`
 
 还依赖 UE 的 Mass、UMG、Slate、RHI、RenderCore、EnhancedInput 等模块；具体以 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs` 为准。
 
-当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。`AFogOfWar` 场景主画面只需要配置 `GridVolume` 和 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
+当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。`AFogOfWar` 场景主画面只需要配置 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
 
 小地图最简使用方式：
 
@@ -255,10 +289,9 @@ UnitSize
 
 镜头内战争迷雾不要走小地图数据，也不要把 tile 当作最终显示模型。CPU 只做收集和压缩：
 
-1. 用 `OpenRTSCamera` 的地面四点确定镜头附近区域。
-2. 用 `MassBattleHashGridSubsystem` 收集可能影响镜头的视野源。
-3. 对同一个 HashGrid cell 内的视野源做保守圆合并。
-4. 把圆形视野源上传给后处理材质。
+1. 用 `MassBattleHashGridSubsystem` 遍历当前活跃 HashGrid cell。
+2. 按真实单位位置上传圆形视野源。
+3. 把圆形视野源上传给后处理材质。
 
 后处理材质接收：
 

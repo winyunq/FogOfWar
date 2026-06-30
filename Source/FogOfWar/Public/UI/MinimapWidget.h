@@ -8,6 +8,19 @@
 #include "Components/Image.h"
 #include "MinimapWidget.generated.h"
 
+UENUM(BlueprintType)
+enum class EFogOfWarMinimapTeamColor : uint8
+{
+	Neutral = 0 UMETA(DisplayName = "Neutral"),
+	Player = 1 UMETA(DisplayName = "Player"),
+	Enemy = 2 UMETA(DisplayName = "Enemy"),
+	AllyBlue = 3 UMETA(DisplayName = "Ally Blue"),
+	Yellow = 4 UMETA(DisplayName = "Yellow"),
+	Cyan = 5 UMETA(DisplayName = "Cyan"),
+	Purple = 6 UMETA(DisplayName = "Purple"),
+	Orange = 7 UMETA(DisplayName = "Orange")
+};
+
 class UImage;
 class UTextureRenderTarget2D;
 class UMaterialInterface;
@@ -64,6 +77,48 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance", meta = (ClampMin = "1.0", UIMin = "1.0"))
 	float CanvasUnitDotSize = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
+	FLinearColor DefaultTeamColor = FLinearColor(0.45f, 0.45f, 0.45f, 1.0f);
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
+	TArray<FLinearColor> RecommendedTeamColors = {
+		FLinearColor(0.45f, 0.45f, 0.45f, 1.0f),
+		FLinearColor(0.10f, 0.72f, 0.18f, 1.0f),
+		FLinearColor(0.85f, 0.12f, 0.10f, 1.0f),
+		FLinearColor(0.12f, 0.34f, 0.95f, 1.0f),
+		FLinearColor(0.95f, 0.72f, 0.10f, 1.0f),
+		FLinearColor(0.10f, 0.80f, 0.90f, 1.0f),
+		FLinearColor(0.75f, 0.20f, 0.85f, 1.0f),
+		FLinearColor(0.95f, 0.45f, 0.12f, 1.0f)
+	};
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
+	bool bNormalizeTeamColorDirection = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float NormalUnitColorLength = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float SelectedUnitColorLength = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
+	FLinearColor CombatUnitColor = FLinearColor::White;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
+	bool bEnableCombatColorFlash = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team", meta = (ClampMin = "0.01", UIMin = "0.01"))
+	float CombatColorFlashHz = 3.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team", meta = (ClampMin = "0.0", UIMin = "0.0"))
+	float DefaultUnitPixelRadius = 1.5f;
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Minimap|Team")
+	FLinearColor GetRecommendedTeamColor(EFogOfWarMinimapTeamColor TeamColor) const;
+
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Team")
+	void NormalizeRecommendedTeamColors();
 
 	/** 小地图纹理的分辨率 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance")

@@ -41,13 +41,41 @@ FOW_BottomLeftWorldLocation: float3
 FOW_GridSize / FOW_GridWorldSize: float3
 ```
 
-## 材质节点
+## 推荐：用 UMGMCP 生成材质
 
-创建一个 Post Process 材质：
+不要用 `hlsl_set_target/hlsl_set/hlsl_compile` 写这个材质；那组接口是 UMG/UI 材质协议，会把目标限制为 `MD_UI`。
+
+启用 `UmgMcp` 后，用材质 MCP 调：
+
+```text
+material_setup_scene_fog_postprocess(
+  path="/FogOfWar/Core/Materials/M_FogOfWarPostProcessing",
+  overwrite=true
+)
+```
+
+它会生成：
 
 ```text
 Material Domain = Post Process
-Blendable Location = Before Tonemapping 或 After Tonemapping（二选一，先用 After Tonemapping 调试）
+Blendable Location = After Tonemapping
+SceneTexture(PostProcessInput0)
+WorldPosition
+TextureObjectParameter(FOW_SceneGpuVisionSourceTexture)
+ScalarParameter(FOW_SceneGpuVisionSourceCount)
+ScalarParameter(FOW_EnableSceneGpuVisionSources)
+ScalarParameter(FOW_NotVisibleRegionBrightness)
+ScalarParameter(FOW_FogEdgeWidth)
+Custom HLSL -> EmissiveColor
+```
+
+## 材质节点
+
+如果手动创建，目标仍然是一个 Post Process 材质：
+
+```text
+Material Domain = Post Process
+Blendable Location = After Tonemapping
 Shading Model = Unlit
 ```
 
@@ -61,56 +89,59 @@ ScalarParameter(FOW_SceneGpuVisionSourceCount) -> SourceCount
 ScalarParameter(FOW_EnableSceneGpuVisionSources) -> Enable
 ScalarParameter(FOW_NotVisibleRegionBrightness) -> FogBrightness
 ScalarParameter(FOW_FogEdgeWidth) -> EdgeWidth
-Custom Node -> Visibility
-Lerp(SceneColor * FogBrightness, SceneColor, Visibility) -> Emissive Color
+Custom Node -> Emissive Color
 ```
 
 ## Custom Node 输入
 
-Custom Node 输出类型用 `CMOT Float 1`。
+Custom Node 输出类型用 `CMOT Float 4`。
 
 输入：
 
 ```text
-SourceTexture: Texture2D
-SourceCount: float
-Enable: float
-CurrentPixelWorldXY: float2
-EdgeWidth: float
+SceneColor: float4
+CurrentPixelWorldPosition: float3
+FOW_SceneGpuVisionSourceTexture: Texture2D
+FOW_SceneGpuVisionSourceCount: float
+FOW_EnableSceneGpuVisionSources: float
+FOW_NotVisibleRegionBrightness: float
+FOW_FogEdgeWidth: float
 ```
 
 ## Custom Node HLSL
 
 ```hlsl
-float Visible = 0.0;
-
-if (Enable > 0.5)
+if (FOW_EnableSceneGpuVisionSources <= 0.5)
 {
-    [loop]
-    for (int SourceIndex = 0; SourceIndex < (int)SourceCount; ++SourceIndex)
-    {
-        float4 Source = SourceTexture.Load(int3(SourceIndex, 0, 0));
-        float2 Delta = CurrentPixelWorldXY - Source.xy;
-        float DistSq = dot(Delta, Delta);
-
-        float Radius = Source.z;
-        float Covered = 0.0;
-
-        if (EdgeWidth > 0.0)
-        {
-            float Dist = sqrt(DistSq);
-            Covered = 1.0 - smoothstep(Radius - EdgeWidth, Radius, Dist);
-        }
-        else
-        {
-            Covered = 1.0 - step(Radius * Radius, DistSq);
-        }
-
-        Visible = max(Visible, Covered);
-    }
+    return SceneColor;
 }
 
-return saturate(Visible);
+float Visible = 0.0;
+float2 CurrentPixelWorldXY = CurrentPixelWorldPosition.xy;
+int SourceCount = (int)min(FOW_SceneGpuVisionSourceCount, 4096.0);
+float EdgeWidth = max(FOW_FogEdgeWidth, 0.0);
+
+[loop]
+for (int SourceIndex = 0; SourceIndex < SourceCount; ++SourceIndex)
+{
+    float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
+    float Radius = max(Source.z, 0.0);
+    float2 Delta = CurrentPixelWorldXY - Source.xy;
+    float DistSq = dot(Delta, Delta);
+    float Covered = 1.0 - step(Radius * Radius, DistSq);
+
+    if (EdgeWidth > 0.0)
+    {
+        float Dist = sqrt(DistSq);
+        Covered = 1.0 - smoothstep(Radius - EdgeWidth, Radius, Dist);
+    }
+
+    Visible = max(Visible, Covered);
+}
+
+float FogBrightness = saturate(FOW_NotVisibleRegionBrightness);
+float3 OutputRgb = lerp(SceneColor.rgb * FogBrightness, SceneColor.rgb, saturate(Visible));
+return float4(OutputRgb, SceneColor.a);
 ```
 
 ## 性能注意

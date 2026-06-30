@@ -7,14 +7,20 @@
 #include "Subsystems/MassBattleHashGridSubsystem.h"
 #include "MassEntitySubsystem.h"
 #include "MassFogOfWarFragments.h"
+#include "RTSSelectionSubsystem.h"
 #include "DrawDebugHelpers.h"
+#include "Engine/LocalPlayer.h"
+#include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
 	constexpr int32 DefaultMinimapResolution = 256;
 	constexpr float DefaultVisionTileSize = 100.0f;
+	const TCHAR* MinimapPerformanceCsvRelativePath = TEXT("Logs/FogOfWar_MinimapPerf.csv");
 
 	FORCEINLINE void ValidateAndClampResolution(FIntPoint& Resolution)
 	{
@@ -31,6 +37,7 @@ namespace
 	{
 		return static_cast<float>(FPlatformTime::ToMilliseconds64(Cycles));
 	}
+
 }
 
 // Define the static singleton instance pointer.
@@ -40,6 +47,7 @@ void UMinimapDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	SingletonInstance = this;
+	RebuildTeamDisplayColorCache();
 
 	// 被动初始化：如果场景中已存在 MinimapRegion，则自动提取参数
 	TArray<AActor*> FoundRegions;
@@ -89,6 +97,69 @@ void UMinimapDataSubsystem::SyncFogOfWarRuntimeOptions(float InVisionBlockingDel
 FLinearColor UMinimapDataSubsystem::GetTeamColor(int32 TeamIndex) const
 {
 	return TeamColors.IsValidIndex(TeamIndex) ? TeamColors[TeamIndex] : DefaultTeamColor;
+}
+
+FLinearColor UMinimapDataSubsystem::BuildCachedTeamDisplayColor(const FLinearColor& TeamColor, float TargetLength) const
+{
+	const FVector3f RawRgb(
+		FMath::Max(0.0f, TeamColor.R),
+		FMath::Max(0.0f, TeamColor.G),
+		FMath::Max(0.0f, TeamColor.B));
+	const float RawLength = RawRgb.Size();
+	const float Scale = bNormalizeTeamColorDirection && RawLength > KINDA_SMALL_NUMBER
+		? TargetLength / RawLength
+		: TargetLength;
+	return FLinearColor(
+		FMath::Clamp(RawRgb.X * Scale, 0.0f, 1.0f),
+		FMath::Clamp(RawRgb.Y * Scale, 0.0f, 1.0f),
+		FMath::Clamp(RawRgb.Z * Scale, 0.0f, 1.0f),
+		TeamColor.A);
+}
+
+void UMinimapDataSubsystem::RebuildTeamDisplayColorCache()
+{
+	NormalTeamDisplayColors.Reset(TeamColors.Num());
+	SelectedTeamDisplayColors.Reset(TeamColors.Num());
+	TeamDisplayColorsByState.Reset(TeamColors.Num() * 2);
+
+	for (const FLinearColor& TeamColor : TeamColors)
+	{
+		const FLinearColor NormalColor = BuildCachedTeamDisplayColor(TeamColor, NormalUnitColorLength);
+		const FLinearColor SelectedColor = BuildCachedTeamDisplayColor(TeamColor, SelectedUnitColorLength);
+		NormalTeamDisplayColors.Add(NormalColor);
+		SelectedTeamDisplayColors.Add(SelectedColor);
+		TeamDisplayColorsByState.Add(NormalColor);
+		TeamDisplayColorsByState.Add(SelectedColor);
+	}
+
+	DefaultNormalTeamDisplayColor = BuildCachedTeamDisplayColor(DefaultTeamColor, NormalUnitColorLength);
+	DefaultSelectedTeamDisplayColor = BuildCachedTeamDisplayColor(DefaultTeamColor, SelectedUnitColorLength);
+	DefaultTeamDisplayColorsByState.Reset(2);
+	DefaultTeamDisplayColorsByState.Add(DefaultNormalTeamDisplayColor);
+	DefaultTeamDisplayColorsByState.Add(DefaultSelectedTeamDisplayColor);
+}
+
+void UMinimapDataSubsystem::SyncMinimapDisplayOptions(
+	const FLinearColor& InDefaultTeamColor,
+	const TArray<FLinearColor>& InTeamColors,
+	bool bInNormalizeTeamColorDirection,
+	float InNormalUnitColorLength,
+	float InSelectedUnitColorLength,
+	const FLinearColor& InCombatUnitColor,
+	bool bInEnableCombatColorFlash,
+	float InCombatColorFlashHz,
+	float InDefaultUnitPixelRadius)
+{
+	DefaultTeamColor = InDefaultTeamColor;
+	TeamColors = InTeamColors;
+	bNormalizeTeamColorDirection = bInNormalizeTeamColorDirection;
+	NormalUnitColorLength = FMath::Max(0.0f, InNormalUnitColorLength);
+	SelectedUnitColorLength = FMath::Max(0.0f, InSelectedUnitColorLength);
+	CombatUnitColor = InCombatUnitColor;
+	bEnableCombatColorFlash = bInEnableCombatColorFlash;
+	CombatColorFlashHz = FMath::Max(0.01f, InCombatColorFlashHz);
+	DefaultMinimapUnitPixelRadius = FMath::Max(0.0f, InDefaultUnitPixelRadius);
+	RebuildTeamDisplayColorCache();
 }
 
 void UMinimapDataSubsystem::SyncVisionGridParameters(const FVector2D& InGridOrigin, const FVector2D& InGridSize, float InVisionTileSize, const FIntPoint& InVisionResolution)
@@ -247,6 +318,13 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 
 	if (!GetWorld()) return;
 	const double TotalStartTime = FPlatformTime::Seconds();
+	bDrawCombatColorThisUpdate = true;
+	if (bEnableCombatColorFlash)
+	{
+		const float CombatPhase = FMath::Fmod(GetWorld()->GetTimeSeconds() * CombatColorFlashHz, 1.0f);
+		bDrawCombatColorThisUpdate = CombatPhase < 0.5f;
+	}
+
 	const bool bCollectStats = bEnableMinimapPerformanceStats;
 	const bool bCollectDetailedStats = bCollectStats && bEnableDetailedMinimapPerformanceStats;
 	FMinimapHashGridPerfStats Stats;
@@ -262,7 +340,17 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
 	if (!HashGrid || !EntitySubsystem) return;
 	FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
-
+	URTSSelectionSubsystem* SelectionSubsystem = nullptr;
+	if (const UWorld* World = GetWorld())
+	{
+		if (const APlayerController* PlayerController = World->GetFirstPlayerController())
+		{
+			if (const ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer())
+			{
+				SelectionSubsystem = LocalPlayer->GetSubsystem<URTSSelectionSubsystem>();
+			}
+		}
+	}
 	Stats.HashGridBlocks = HashGrid->AgentGrid.Num();
 	Stats.AgentCellSize = HashGrid->AgentCellSize;
 	Stats.AgentBlockDimensions = HashGrid->AgentBlockDimensionsCache;
@@ -278,11 +366,14 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	const double ClearStartTime = FPlatformTime::Seconds();
 	for (FMinimapTile& Tile : MinimapTiles)
 	{
+		Tile.PreviousColor = Tile.Color;
 		Tile.UnitCount = 0;
 		Tile.MaxSightRadius = 0.0f;
 		Tile.MaxIconSize = 0.0f;
 		Tile.RepresentativeInfluence = -FLT_MAX;
 		Tile.Color = FLinearColor::Transparent;
+		Tile.bHasSelectedUnit = false;
+		Tile.bHasCombatUnit = false;
 	}
 	Stats.ClearTilesMs = SecondsToMs(FPlatformTime::Seconds() - ClearStartTime);
 
@@ -371,21 +462,19 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 					FMinimapTile& MiniTile = MinimapTiles[TileIndex];
 					MiniTile.UnitCount++;
 					Stats.MinimapCellsWritten++;
+					const bool bSelected = SelectionSubsystem && SelectionSubsystem->IsEntitySelected(AgentData.EntityHandle);
+					const bool bInCombat = AgentData.bIsAttacker != 0;
+					const int32 SelectedBit = static_cast<int32>(bSelected);
+					const int32 CombatBit = static_cast<int32>(bInCombat && bDrawCombatColorThisUpdate);
+					MiniTile.bHasSelectedUnit |= bSelected;
+					MiniTile.bHasCombatUnit |= bInCombat;
 					
 					// Fallback defaults come from MassBattle's own unit size fragments.
 					const uint64 FragmentStartCycles = bCollectDetailedStats ? FPlatformTime::Cycles64() : 0;
 					const FOW_TEAM_FRAGMENT* TeamFrag = EntityManager.GetFragmentDataPtr<FOW_TEAM_FRAGMENT>(AgentData.EntityHandle);
 					Stats.FragmentDataPtrCalls++;
-					FLinearColor IconColor = TeamFrag ? GetTeamColor(FOW_GET_TEAM_INDEX(*TeamFrag)) : DefaultTeamColor;
-					float IconSize = DefaultMinimapUnitPixelRadius;
-
-					if (const FMassMinimapRepresentationFragment* RepFrag = EntityManager.GetFragmentDataPtr<FMassMinimapRepresentationFragment>(AgentData.EntityHandle))
-					{
-						Stats.AgentsWithRepresentationFragment++;
-						IconColor = RepFrag->IconColor;
-						IconSize = RepFrag->IconSize;
-					}
-					Stats.FragmentDataPtrCalls++;
+					const int32 TeamIndex = TeamFrag ? FOW_GET_TEAM_INDEX(*TeamFrag) : INDEX_NONE;
+					const float IconSize = DefaultMinimapUnitPixelRadius;
 
 					float SightRadius = DefaultMassBattleSightRadius;
 					if (const FMassVisionFragment* VisionFrag = EntityManager.GetFragmentDataPtr<FMassVisionFragment>(AgentData.EntityHandle))
@@ -396,11 +485,16 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 					Stats.FragmentDataPtrCalls++;
 
 					MiniTile.MaxSightRadius = FMath::Max(MiniTile.MaxSightRadius, SightRadius);
-					const float Influence = SightRadius;
+					const float Influence = SightRadius + (bSelected ? 1000000.0f : 0.0f) + (bInCombat ? 100000.0f : 0.0f);
 					if (Influence >= MiniTile.RepresentativeInfluence)
 					{
 						MiniTile.RepresentativeInfluence = Influence;
-						MiniTile.Color = IconColor;
+						const int32 ColorIndex = (TeamIndex << 1) | SelectedBit;
+						const FLinearColor TeamStateColor = TeamDisplayColorsByState.IsValidIndex(ColorIndex)
+							? TeamDisplayColorsByState[ColorIndex]
+							: DefaultTeamDisplayColorsByState[SelectedBit];
+						const float CombatAlpha = static_cast<float>(CombatBit);
+						MiniTile.Color = TeamStateColor * (1.0f - CombatAlpha) + CombatUnitColor * CombatAlpha;
 						MiniTile.MaxIconSize = FMath::Max(0.0f, IconSize);
 					}
 					if (bCollectDetailedStats)
@@ -415,38 +509,9 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	Stats.EstimatedTraversalAndProjectionMs = FMath::Max(0.0f, Stats.TraverseHashGridMs - Stats.EntityValidationMs - Stats.FragmentLookupMs);
 	Stats.TotalMs = SecondsToMs(FPlatformTime::Seconds() - TotalStartTime);
 	LastHashGridPerfStats = Stats;
-	
 	if (bCollectStats)
 	{
-		const double CurrentTime = GetWorld()->GetTimeSeconds();
-		if (CurrentTime - LastHashGridPerfLogTime >= MinimapPerformanceLogInterval)
-		{
-			UE_LOG(LogTemp, Warning,
-				TEXT("[MinimapPerf][HashGridRead] Total=%.3fms Clear=%.3fms TraverseAll=%.3fms TraverseEst=%.3fms EntityValid=%.3fms FragLookup=%.3fms Detailed=%d Blocks=%d ValidBlocks=%d OccCells=%d NonEmpty=%d Agents=%d InBounds=%d OOB=%d InvalidEnt=%d FragCalls=%d Rep=%d Vision=%d Writes=%d AgentCell=%s BlockDim=%s First=%s"),
-				Stats.TotalMs,
-				Stats.ClearTilesMs,
-				Stats.TraverseHashGridMs,
-				Stats.EstimatedTraversalAndProjectionMs,
-				Stats.EntityValidationMs,
-				Stats.FragmentLookupMs,
-				bCollectDetailedStats ? 1 : 0,
-				Stats.HashGridBlocks,
-				Stats.ValidBlocks,
-				Stats.OccupiedCells,
-				Stats.NonEmptyCells,
-				Stats.AgentsVisited,
-				Stats.AgentsInBounds,
-				Stats.SkippedOutOfBounds,
-				Stats.InvalidEntities,
-				Stats.FragmentDataPtrCalls,
-				Stats.AgentsWithRepresentationFragment,
-				Stats.AgentsWithVisionFragment,
-				Stats.MinimapCellsWritten,
-				*Stats.AgentCellSize.ToString(),
-				*Stats.AgentBlockDimensions.ToString(),
-				*FirstAgentLoc.ToString());
-			LastHashGridPerfLogTime = CurrentTime;
-		}
+		RecordHashGridPerfStats(Stats);
 	}
 }
 
@@ -458,24 +523,154 @@ void UMinimapDataSubsystem::RecordMinimapDrawPerfStats(const FMinimapDrawPerfSta
 		return;
 	}
 
+	DrawPerfAccum.TotalMs += Stats.TotalMs;
+	DrawPerfAccum.LockTexturesMs += Stats.LockTexturesMs;
+	DrawPerfAccum.ScanTilesMs += Stats.ScanTilesMs;
+	DrawPerfAccum.UploadTexturesMs += Stats.UploadTexturesMs;
+	DrawPerfAccum.DrawRenderTargetMs += Stats.DrawRenderTargetMs;
+	DrawPerfAccum.SourceTilesScanned += Stats.SourceTilesScanned;
+	DrawPerfAccum.ActiveTiles += Stats.ActiveTiles;
+	DrawPerfAccum.EncodedUnits += Stats.EncodedUnits;
+	DrawPerfAccum.EncodedVisionSources += Stats.EncodedVisionSources;
+	DrawPerfAccum.TotalUnitsRepresented += Stats.TotalUnitsRepresented;
+	DrawPerfAccum.MaxUnitsInSingleTile = FMath::Max(DrawPerfAccum.MaxUnitsInSingleTile, Stats.MaxUnitsInSingleTile);
+	DrawPerfSampleCount++;
+
 	const double CurrentTime = GetWorld()->GetTimeSeconds();
-	if (CurrentTime - LastDrawPerfLogTime < MinimapPerformanceLogInterval)
+	if (CurrentTime - LastDrawPerfLogTime >= MinimapPerformanceLogInterval)
+	{
+		FlushDrawPerfStats(CurrentTime);
+	}
+}
+
+void UMinimapDataSubsystem::RecordHashGridPerfStats(const FMinimapHashGridPerfStats& Stats)
+{
+	HashGridPerfAccum.TotalMs += Stats.TotalMs;
+	HashGridPerfAccum.ClearTilesMs += Stats.ClearTilesMs;
+	HashGridPerfAccum.TraverseHashGridMs += Stats.TraverseHashGridMs;
+	HashGridPerfAccum.EstimatedTraversalAndProjectionMs += Stats.EstimatedTraversalAndProjectionMs;
+	HashGridPerfAccum.EntityValidationMs += Stats.EntityValidationMs;
+	HashGridPerfAccum.FragmentLookupMs += Stats.FragmentLookupMs;
+	HashGridPerfAccum.HashGridBlocks += Stats.HashGridBlocks;
+	HashGridPerfAccum.ValidBlocks += Stats.ValidBlocks;
+	HashGridPerfAccum.OccupiedCells += Stats.OccupiedCells;
+	HashGridPerfAccum.NonEmptyCells += Stats.NonEmptyCells;
+	HashGridPerfAccum.AgentsVisited += Stats.AgentsVisited;
+	HashGridPerfAccum.AgentsInBounds += Stats.AgentsInBounds;
+	HashGridPerfAccum.SkippedOutOfBounds += Stats.SkippedOutOfBounds;
+	HashGridPerfAccum.EntityValidationChecks += Stats.EntityValidationChecks;
+	HashGridPerfAccum.InvalidEntities += Stats.InvalidEntities;
+	HashGridPerfAccum.FragmentDataPtrCalls += Stats.FragmentDataPtrCalls;
+	HashGridPerfAccum.AgentsWithRepresentationFragment += Stats.AgentsWithRepresentationFragment;
+	HashGridPerfAccum.AgentsWithVisionFragment += Stats.AgentsWithVisionFragment;
+	HashGridPerfAccum.MinimapCellsWritten += Stats.MinimapCellsWritten;
+	HashGridPerfAccum.AgentCellSize = Stats.AgentCellSize;
+	HashGridPerfAccum.AgentBlockDimensions = Stats.AgentBlockDimensions;
+	HashGridPerfSampleCount++;
+
+	if (!GetWorld())
 	{
 		return;
 	}
 
-	UE_LOG(LogTemp, Warning,
-		TEXT("[MinimapPerf][Draw] Total=%.3fms Lock=%.3fms ScanTiles=%.3fms Upload=%.3fms DrawRT=%.3fms SourceTiles=%d ActiveTiles=%d EncodedUnits=%d VisionSources=%d UnitsRepresented=%d MaxStack=%d"),
-		Stats.TotalMs,
-		Stats.LockTexturesMs,
-		Stats.ScanTilesMs,
-		Stats.UploadTexturesMs,
-		Stats.DrawRenderTargetMs,
-		Stats.SourceTilesScanned,
-		Stats.ActiveTiles,
-		Stats.EncodedUnits,
-		Stats.EncodedVisionSources,
-		Stats.TotalUnitsRepresented,
-		Stats.MaxUnitsInSingleTile);
+	const double CurrentTime = GetWorld()->GetTimeSeconds();
+	if (CurrentTime - LastHashGridPerfLogTime >= MinimapPerformanceLogInterval)
+	{
+		FlushHashGridPerfStats(CurrentTime);
+	}
+}
+
+void UMinimapDataSubsystem::FlushHashGridPerfStats(double CurrentTime)
+{
+	if (HashGridPerfSampleCount <= 0)
+	{
+		return;
+	}
+
+	const float InvSamples = 1.0f / static_cast<float>(HashGridPerfSampleCount);
+	const FString CsvColumns = FString::Printf(
+		TEXT("%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%s,%s"),
+		HashGridPerfSampleCount,
+		HashGridPerfAccum.TotalMs * InvSamples,
+		HashGridPerfAccum.ClearTilesMs * InvSamples,
+		HashGridPerfAccum.TraverseHashGridMs * InvSamples,
+		HashGridPerfAccum.EstimatedTraversalAndProjectionMs * InvSamples,
+		HashGridPerfAccum.EntityValidationMs * InvSamples,
+		HashGridPerfAccum.FragmentLookupMs * InvSamples,
+		HashGridPerfAccum.HashGridBlocks * InvSamples,
+		HashGridPerfAccum.ValidBlocks * InvSamples,
+		HashGridPerfAccum.OccupiedCells * InvSamples,
+		HashGridPerfAccum.NonEmptyCells * InvSamples,
+		HashGridPerfAccum.AgentsVisited * InvSamples,
+		HashGridPerfAccum.AgentsInBounds * InvSamples,
+		HashGridPerfAccum.SkippedOutOfBounds * InvSamples,
+		HashGridPerfAccum.InvalidEntities * InvSamples,
+		HashGridPerfAccum.FragmentDataPtrCalls * InvSamples,
+		HashGridPerfAccum.AgentsWithRepresentationFragment * InvSamples,
+		HashGridPerfAccum.AgentsWithVisionFragment * InvSamples,
+		HashGridPerfAccum.MinimapCellsWritten * InvSamples,
+		*HashGridPerfAccum.AgentCellSize.ToString(),
+		*HashGridPerfAccum.AgentBlockDimensions.ToString());
+
+	if (bLogMinimapPerformanceToOutputLog)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[FogOfWarPerf][MinimapHashGridAvg] %s"), *CsvColumns);
+	}
+	AppendPerformanceCsvLine(TEXT("MinimapHashGridAvg"), CsvColumns);
+
+	HashGridPerfAccum = FMinimapHashGridPerfStats();
+	HashGridPerfSampleCount = 0;
+	LastHashGridPerfLogTime = CurrentTime;
+}
+
+void UMinimapDataSubsystem::FlushDrawPerfStats(double CurrentTime)
+{
+	if (DrawPerfSampleCount <= 0)
+	{
+		return;
+	}
+
+	const float InvSamples = 1.0f / static_cast<float>(DrawPerfSampleCount);
+	const FString CsvColumns = FString::Printf(
+		TEXT("%d,%.3f,%.3f,%.3f,%.3f,%.3f,0.000,%.1f,%.1f,%.1f,%.1f,%.1f,%d,0,0,0,0,0,0,,"),
+		DrawPerfSampleCount,
+		DrawPerfAccum.TotalMs * InvSamples,
+		DrawPerfAccum.LockTexturesMs * InvSamples,
+		DrawPerfAccum.ScanTilesMs * InvSamples,
+		DrawPerfAccum.UploadTexturesMs * InvSamples,
+		DrawPerfAccum.DrawRenderTargetMs * InvSamples,
+		DrawPerfAccum.SourceTilesScanned * InvSamples,
+		DrawPerfAccum.ActiveTiles * InvSamples,
+		DrawPerfAccum.EncodedUnits * InvSamples,
+		DrawPerfAccum.EncodedVisionSources * InvSamples,
+		DrawPerfAccum.TotalUnitsRepresented * InvSamples,
+		DrawPerfAccum.MaxUnitsInSingleTile);
+
+	if (bLogMinimapPerformanceToOutputLog)
+	{
+		UE_LOG(LogTemp, Log, TEXT("[FogOfWarPerf][MinimapDrawAvg] %s"), *CsvColumns);
+	}
+	AppendPerformanceCsvLine(TEXT("MinimapDrawAvg"), CsvColumns);
+
+	DrawPerfAccum = FMinimapDrawPerfStats();
+	DrawPerfSampleCount = 0;
 	LastDrawPerfLogTime = CurrentTime;
+}
+
+void UMinimapDataSubsystem::AppendPerformanceCsvLine(const FString& Channel, const FString& CsvColumns) const
+{
+	if (!bWriteMinimapPerformanceCsv || !GetWorld())
+	{
+		return;
+	}
+
+	const FString FilePath = FPaths::ProjectSavedDir() / MinimapPerformanceCsvRelativePath;
+	const bool bNeedsHeader = !FPaths::FileExists(FilePath);
+	FString Output;
+	if (bNeedsHeader)
+	{
+		Output += TEXT("WorldTime,Channel,Samples,AvgTotalMs,AvgClearOrLockMs,AvgTraverseOrScanMs,AvgTraverseEstOrUploadMs,AvgEntityValidOrDrawRTMs,AvgFragLookupMs,AvgBlocksOrSourceTiles,AvgValidBlocksOrActiveTiles,AvgOccCellsOrEncodedUnits,AvgNonEmptyCellsOrVisionSources,AvgAgentsOrUnitsRepresented,AvgInBoundsOrMaxStack,AvgOutOfBounds,AvgInvalidEntities,AvgFragmentCalls,AvgRepFragments,AvgVisionFragments,AvgWrites,ExtraA,ExtraB\n");
+	}
+	Output += FString::Printf(TEXT("%.3f,%s,%s\n"), GetWorld()->GetTimeSeconds(), *Channel, *CsvColumns);
+	FFileHelper::SaveStringToFile(Output, *FilePath, FFileHelper::EEncodingOptions::AutoDetect, &IFileManager::Get(), FILEWRITE_Append);
 }

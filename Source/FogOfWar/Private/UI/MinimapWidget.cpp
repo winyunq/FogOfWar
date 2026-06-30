@@ -56,6 +56,16 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	}
 
 	MinimapDataSubsystem->SetMinimapResolution(TextureResolution);
+	MinimapDataSubsystem->SyncMinimapDisplayOptions(
+		DefaultTeamColor,
+		RecommendedTeamColors,
+		bNormalizeTeamColorDirection,
+		NormalUnitColorLength,
+		SelectedUnitColorLength,
+		CombatUnitColor,
+		bEnableCombatColorFlash,
+		CombatColorFlashHz,
+		DefaultUnitPixelRadius);
 
 	if (!MinimapRenderTarget)
 	{
@@ -107,16 +117,14 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	{
 		FMassEntityManager& EntityManager = EntitySubsystem->GetMutableEntityManager();
 		CountQuery = FMassEntityQuery(EntityManager.AsShared());
-		CountQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+		CountQuery.AddRequirement<FOW_LOCATION_FRAGMENT>(EMassFragmentAccess::ReadOnly);
 
 		DrawQuery = FMassEntityQuery(EntityManager.AsShared());
 		DrawQuery.AddRequirement<FOW_LOCATION_FRAGMENT>(EMassFragmentAccess::ReadOnly);
-		DrawQuery.AddRequirement<FMassMinimapRepresentationFragment>(EMassFragmentAccess::ReadOnly);
+		DrawQuery.AddRequirement<FOW_TEAM_FRAGMENT>(EMassFragmentAccess::ReadOnly);
 		DrawQuery.AddRequirement<FMassVisionFragment>(EMassFragmentAccess::ReadOnly);
 	}
 	
-	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized Minimap System."));
-
 	UE_LOG(LogMinimapWidget, Log, TEXT("Successfully initialized Minimap System."));
 
 	if (MinimapImage)
@@ -127,6 +135,40 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	}
 	bIsSuccessfullyInitialized = true;
 	return true;
+}
+
+FLinearColor UMinimapWidget::GetRecommendedTeamColor(EFogOfWarMinimapTeamColor TeamColor) const
+{
+	const int32 Index = static_cast<int32>(TeamColor);
+	return RecommendedTeamColors.IsValidIndex(Index) ? RecommendedTeamColors[Index] : DefaultTeamColor;
+}
+
+void UMinimapWidget::NormalizeRecommendedTeamColors()
+{
+	const float TargetLength = FMath::Max(0.0f, SelectedUnitColorLength);
+	auto NormalizeColor = [TargetLength](FLinearColor& Color)
+	{
+		const FVector3f Rgb(
+			FMath::Max(0.0f, Color.R),
+			FMath::Max(0.0f, Color.G),
+			FMath::Max(0.0f, Color.B));
+		const float Length = Rgb.Size();
+		if (Length <= KINDA_SMALL_NUMBER)
+		{
+			return;
+		}
+
+		const float Scale = TargetLength / Length;
+		Color.R = FMath::Clamp(Rgb.X * Scale, 0.0f, 1.0f);
+		Color.G = FMath::Clamp(Rgb.Y * Scale, 0.0f, 1.0f);
+		Color.B = FMath::Clamp(Rgb.Z * Scale, 0.0f, 1.0f);
+	};
+
+	NormalizeColor(DefaultTeamColor);
+	for (FLinearColor& TeamColor : RecommendedTeamColors)
+	{
+		NormalizeColor(TeamColor);
+	}
 }
 
 void UMinimapWidget::NativeConstruct()
@@ -254,7 +296,7 @@ void UMinimapWidget::DrawInLessSize()
 	DrawQuery.ForEachEntityChunk(Context, [this, &UnitCount, &VisionSourceCount, IconDataPtr, IconColorPtr, VisionDataPtr](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FOW_LOCATION_FRAGMENT> LocationList = Context.GetFragmentView<FOW_LOCATION_FRAGMENT>();
-		const TConstArrayView<FMassMinimapRepresentationFragment> RepList = Context.GetFragmentView<FMassMinimapRepresentationFragment>();
+		const TConstArrayView<FOW_TEAM_FRAGMENT> TeamList = Context.GetFragmentView<FOW_TEAM_FRAGMENT>();
 		const TConstArrayView<FMassVisionFragment> VisionList = Context.GetFragmentView<FMassVisionFragment>();
 
 		for (int32 i = 0; i < Context.GetNumEntities(); ++i)
@@ -262,12 +304,16 @@ void UMinimapWidget::DrawInLessSize()
 			if (UnitCount >= MaxUnits) break;
 
 			const FVector WorldLocation = FOW_GET_LOCATION(LocationList[i]);
-			const FMassMinimapRepresentationFragment& RepFragment = RepList[i];
 			const FMassVisionFragment& VisionFragment = VisionList[i];
+			const int32 TeamIndex = FOW_GET_TEAM_INDEX(TeamList[i]);
+			const int32 ColorIndex = TeamIndex << 1;
+			const FLinearColor UnitColor = MinimapDataSubsystem->TeamDisplayColorsByState.IsValidIndex(ColorIndex)
+				? MinimapDataSubsystem->TeamDisplayColorsByState[ColorIndex]
+				: MinimapDataSubsystem->DefaultNormalTeamDisplayColor;
 
 			// Write data directly to texture pointers
-			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, RepFragment.IconSize, 1.0f);
-			IconColorPtr[UnitCount] = RepFragment.IconColor;
+			IconDataPtr[UnitCount] = FLinearColor(WorldLocation.X, WorldLocation.Y, MinimapDataSubsystem->DefaultMinimapUnitPixelRadius, 1.0f);
+			IconColorPtr[UnitCount] = UnitColor;
 			UnitCount++;
 
 			if (MinimapDataSubsystem->bEncodeMinimapVisionSources && VisionFragment.SightRadius > 0.0f)
@@ -395,13 +441,6 @@ void UMinimapWidget::DrawInMassSize()
 	IconColorTexture->UpdateResource();
 	VisionDataTexture->UpdateResource();
 	DrawStats.UploadTexturesMs = static_cast<float>((FPlatformTime::Seconds() - UploadStartTime) * 1000.0);
-
-	// Log Debug Info to help user understand "1 icon" vs "1000 units"
-	// Only log if something changed to avoid spam, or log every few seconds (here we rely on log suppression or manual observation)
-	if (ActiveTileCount > 0)
-	{
-		UE_LOG(LogMinimapWidget, Log, TEXT("DrawInMassSize: %d Active Tiles, %d Material Icons, %d Vision Sources, %d Total Unknown Units in Grid. Max Stack: %d."), ActiveTileCount, MaterialUnitCount, VisionSourceCount, TotalRealUnits, MaxUnitsInSingleTile);
-	}
 
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), MaterialUnitCount);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);

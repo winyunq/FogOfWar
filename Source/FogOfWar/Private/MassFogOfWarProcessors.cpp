@@ -327,15 +327,12 @@ void UMassBattleFogOfWarBootstrapProcessor::Execute(FMassEntityManager& EntityMa
 	}
 
 	const float DefaultSightRadius = MinimapSubsystem->DefaultMassBattleSightRadius;
-	const float DefaultIconPixelRadius = MinimapSubsystem->DefaultMinimapUnitPixelRadius;
 
-	EntityQuery.ForEachEntityChunk(Context, [MinimapSubsystem, DefaultSightRadius, DefaultIconPixelRadius](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [DefaultSightRadius](FMassExecutionContext& Context)
 	{
-		const TConstArrayView<FOW_TEAM_FRAGMENT> TeamList = Context.GetFragmentView<FOW_TEAM_FRAGMENT>();
 		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
 
 		const bool bHasPreviousVision = Context.DoesArchetypeHaveFragment<FMassPreviousVisionFragment>();
-		const bool bHasMinimapRepresentation = Context.DoesArchetypeHaveFragment<FMassMinimapRepresentationFragment>();
 		const bool bHasPreviousMinimapCell = Context.DoesArchetypeHaveFragment<FMassPreviousMinimapCellFragment>();
 		const bool bHasVisionEntityTag = Context.DoesArchetypeHaveTag<FMassVisionEntityTag>();
 		const bool bHasVisibleEntityTag = Context.DoesArchetypeHaveTag<FMassVisibleEntityTag>();
@@ -351,14 +348,6 @@ void UMassBattleFogOfWarBootstrapProcessor::Execute(FMassEntityManager& EntityMa
 			if (!bHasPreviousVision)
 			{
 				Context.Defer().PushCommand<FMassCommandAddFragmentInstances>(Entity, FMassPreviousVisionFragment());
-			}
-
-			if (!bHasMinimapRepresentation)
-			{
-				FMassMinimapRepresentationFragment RepresentationFragment;
-				RepresentationFragment.IconColor = MinimapSubsystem->GetTeamColor(FOW_GET_TEAM_INDEX(TeamList[EntityIndex]));
-				RepresentationFragment.IconSize = DefaultIconPixelRadius;
-				Context.Defer().PushCommand<FMassCommandAddFragmentInstances>(Entity, RepresentationFragment);
 			}
 
 			if (!bHasPreviousMinimapCell)
