@@ -229,6 +229,8 @@ GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本依赖以
 
 还依赖 UE 的 Mass、UMG、Slate、RHI、RenderCore、EnhancedInput 等模块；具体以 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs` 为准。
 
+当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。`AFogOfWar` 场景主画面只需要配置 `GridVolume` 和 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
+
 小地图最简使用方式：
 
 1. 创建一个继承 `UMinimapWidget` 的 UMG。
@@ -317,3 +319,5 @@ FinalColor = lerp(FogColor, SceneColor, saturate(Visible));
 3. `SceneGpuVisionSourceSearchPadding` 必须不小于项目最大视野半径，否则镜头外的大视野源可能漏收。
 4. `MaxSceneGpuVisionSources` 控制材质循环上限；如果过大，GPU 像素循环会变重。
 5. 如果 GPU 循环成为瓶颈，优先减少上传圆源数量，而不是回到 CPU tile。
+
+更详细的 UE 材质节点接线和 Custom Node HLSL 见 `Docs/GPU_SCENE_FOG_MATERIAL.md`。

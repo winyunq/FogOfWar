@@ -210,6 +210,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|Vision")
 	void SyncVisionGridParameters(const FVector2D& InGridOrigin, const FVector2D& InGridSize, float InVisionTileSize, const FIntPoint& InVisionResolution);
 
+	/** 同步世界范围给小地图/场景材质使用，不创建旧 CPU 视野 tile。 */
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar|Minimap")
+	void SyncWorldBounds(const FVector2D& InGridOrigin, const FVector2D& InGridSize);
+
 	void SetVisionGridActive(bool bInActive);
 	bool IsVisionGridReady() const;
 	bool IsMinimapGridReady() const;

@@ -20,9 +20,6 @@ void UMassVisionTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildConte
 		BuildContext.AddTag<FMassVisionEntityTag>();
 		FMassVisionFragment& VisionFragment = BuildContext.AddFragment_GetRef<FMassVisionFragment>();
 		VisionFragment.SightRadius = SightRadius;
-
-		// 【核心修改】单位诞生时，即标记为“已改变”，以便更新器在第一帧处理它
-		BuildContext.AddTag<FMassLocationChangedTag>();
 	}
 
 	// 根据配置添加小地图表示相关的Fragment和Tag

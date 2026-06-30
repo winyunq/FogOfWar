@@ -7,7 +7,6 @@
 #include "Components/PostProcessComponent.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/PlayerController.h"
-#include "Kismet/KismetRenderingLibrary.h"
 #include "MassEntitySubsystem.h"
 #include "RTSCamera.h"
 #include "Subsystems/MassBattleHashGridSubsystem.h"
@@ -22,17 +21,10 @@ DECLARE_STATS_GROUP(TEXT("FogOfWar"), STATGROUP_FogOfWar, STATCAT_Advanced);
 
 namespace Names
 {
-	DECLARE_STATIC_FNAME(FOW_AccumulatedMask);
-	DECLARE_STATIC_FNAME(FOW_NewSnapshot);
-	DECLARE_STATIC_FNAME(FOW_MinimalVisibility);
-	DECLARE_STATIC_FNAME(FOW_NewSnapshotAbsorption);
-	DECLARE_STATIC_FNAME(FOW_VisibilityTextureRenderTarget);
-	DECLARE_STATIC_FNAME(FOW_PreFinalVisibilityTextureRenderTarget);
-	DECLARE_STATIC_FNAME(FOW_FinalVisibilityTexture);
 	DECLARE_STATIC_FNAME(FOW_NotVisibleRegionBrightness);
-	DECLARE_STATIC_FNAME(FOW_GridResolution);
-	DECLARE_STATIC_FNAME(FOW_TileSize);
 	DECLARE_STATIC_FNAME(FOW_BottomLeftWorldLocation);
+	DECLARE_STATIC_FNAME(FOW_GridSize);
+	DECLARE_STATIC_FNAME(FOW_GridWorldSize);
 	DECLARE_STATIC_FNAME(FOW_SceneGpuVisionSourceTexture);
 	DECLARE_STATIC_FNAME(FOW_SceneGpuVisionSourceCount);
 	DECLARE_STATIC_FNAME(FOW_EnableSceneGpuVisionSources);
@@ -154,21 +146,31 @@ AFogOfWar::AFogOfWar()
 
 bool AFogOfWar::IsLocationVisible(FVector WorldLocation)
 {
-	const UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get();
-	return MinimapSubsystem && MinimapSubsystem->bVisionGridActive && MinimapSubsystem->IsVisionGridReady() && MinimapSubsystem->IsLocationVisible(WorldLocation);
+	return false;
 }
 
 UTexture* AFogOfWar::GetFinalVisibilityTexture()
 {
-	return Cast<UTexture>(FinalVisibilityTextureRenderTarget);
+	return nullptr;
 }
 
 void AFogOfWar::SetCommonMIDParameters(UMaterialInstanceDynamic* MID)
 {
-	MID->SetTextureParameterValue(Names::FOW_FinalVisibilityTexture, GetFinalVisibilityTexture());
-	MID->SetVectorParameterValue(Names::FOW_GridResolution, FVector(GridResolution.X, GridResolution.Y, 0));
-	MID->SetScalarParameterValue(Names::FOW_TileSize, TileSize);
+	if (!MID)
+	{
+		return;
+	}
+
 	MID->SetVectorParameterValue(Names::FOW_BottomLeftWorldLocation, FVector(GridBottomLeftWorldLocation.X, GridBottomLeftWorldLocation.Y, 0));
+	MID->SetVectorParameterValue(Names::FOW_GridSize, FVector(GridSize.X, GridSize.Y, 0));
+	MID->SetVectorParameterValue(Names::FOW_GridWorldSize, FVector(GridSize.X, GridSize.Y, 0));
+	MID->SetScalarParameterValue(Names::FOW_NotVisibleRegionBrightness, NotVisibleRegionBrightness);
+	MID->SetScalarParameterValue(Names::FOW_EnableSceneGpuVisionSources, bEnableSceneGpuVisionSources ? 1.0f : 0.0f);
+	MID->SetScalarParameterValue(Names::FOW_SceneGpuVisionSourceCount, static_cast<float>(SceneGpuVisionSourceCount));
+	if (SceneGpuVisionSourceTexture)
+	{
+		MID->SetTextureParameterValue(Names::FOW_SceneGpuVisionSourceTexture, SceneGpuVisionSourceTexture);
+	}
 }
 
 void AFogOfWar::Activate()
@@ -180,72 +182,25 @@ void AFogOfWar::Activate()
 	bActivated = true;
 
 	checkf(IsValid(GridVolume), TEXT("Volume was not set for the FogOfWar Volume"));
-	check(TileSize > 0);
+	checkf(IsValid(PostProcessingMaterial), TEXT("PostProcessingMaterial must be set. GPU FogOfWar uses a single post-process material."));
 
 	Initialize();
 
-	checkf(GridResolution.X + GridResolution.Y <= 10000, TEXT("Grid resolution is too big (possible int32 overflow when calculating square distance)"));
-
 	UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get();
-	check(MinimapSubsystem);
-	MinimapSubsystem->SyncFogOfWarRuntimeOptions(
-		VisionBlockingDeltaHeightThreshold,
-		VisionUpdateWorldDistanceThreshold,
-		bDebugStressTestIgnoreCache,
-		bDebugStressTestMinimap);
-
-	const int GridTilesNum = GridResolution.X * GridResolution.Y;
-	TextureDataBuffer.SetNum(GridTilesNum);
-	check(MinimapSubsystem->VisionTiles.Num() == GridTilesNum);
-
-	for (int I = 0; I < GridResolution.X; I++)
+	if (MinimapSubsystem)
 	{
-		for (int J = 0; J < GridResolution.Y; J++)
-		{
-			FTile& Tile = MinimapSubsystem->GetVisionTile({ I, J });
-			CalculateTileHeight(Tile, { I,J });
-		}
+		MinimapSubsystem->SetVisionGridActive(false);
 	}
 
-	MinimapSubsystem->SetVisionGridActive(true);
-
-#if WITH_EDITORONLY_DATA
-	HeightmapTexture = CreateSnapshotTexture();
-	HeightmapTexture->Filter = TF_Nearest;
-	WriteHeightmapDataToTexture(HeightmapTexture);
-#endif
-
-	SnapshotTexture = CreateSnapshotTexture();
-	VisibilityTextureRenderTarget = CreateRenderTarget();
-	PreFinalVisibilityTextureRenderTarget = CreateRenderTarget();
-	FinalVisibilityTextureRenderTarget = CreateRenderTarget();
-
-	InterpolationMID = UMaterialInstanceDynamic::Create(InterpolationMaterial, this);
-	InterpolationMID->SetTextureParameterValue(Names::FOW_AccumulatedMask, VisibilityTextureRenderTarget);
-	InterpolationMID->SetTextureParameterValue(Names::FOW_NewSnapshot, SnapshotTexture);
-
-	AfterInterpolationMID = UMaterialInstanceDynamic::Create(AfterInterpolationMaterial, this);
-	AfterInterpolationMID->SetTextureParameterValue(Names::FOW_VisibilityTextureRenderTarget, VisibilityTextureRenderTarget);
-	AfterInterpolationMID->SetScalarParameterValue(Names::FOW_MinimalVisibility, MinimalVisibility);
-
-	SuperSamplingMID = UMaterialInstanceDynamic::Create(SuperSamplingMaterial, this);
-	SuperSamplingMID->SetTextureParameterValue(Names::FOW_PreFinalVisibilityTextureRenderTarget, PreFinalVisibilityTextureRenderTarget);
-	SuperSamplingMID->SetVectorParameterValue(Names::FOW_GridResolution, FVector(GridResolution.X, GridResolution.Y, 0));
-
+	SceneGpuVisionSourceTexture = Names::CreateSceneGpuVisionDataTexture(this, FMath::Max(1, MaxSceneGpuVisionSources));
 	PostProcessingMID = UMaterialInstanceDynamic::Create(PostProcessingMaterial, this);
 	SetCommonMIDParameters(PostProcessingMID);
-	PostProcessingMID->SetScalarParameterValue(Names::FOW_NotVisibleRegionBrightness, NotVisibleRegionBrightness);
-	SceneGpuVisionSourceTexture = Names::CreateSceneGpuVisionDataTexture(this, FMath::Max(1, MaxSceneGpuVisionSources));
 	if (SceneGpuVisionSourceTexture)
 	{
 		PostProcessingMID->SetTextureParameterValue(Names::FOW_SceneGpuVisionSourceTexture, SceneGpuVisionSourceTexture);
 	}
-	PostProcessingMID->SetScalarParameterValue(Names::FOW_SceneGpuVisionSourceCount, 0.0f);
-	PostProcessingMID->SetScalarParameterValue(Names::FOW_EnableSceneGpuVisionSources, bEnableSceneGpuVisionSources ? 1.0f : 0.0f);
 
 	PostProcess->AddOrUpdateBlendable(PostProcessingMID);
-
-	// Deprecated: MinimapSubsystem is now decoupled from AFogOfWar.
 
 	auto GameManager = UManagerStatics::GetGameManager(this);
 	GameManager->Register<ThisClass>(this);
@@ -282,11 +237,7 @@ bool AFogOfWar::CanEditChange(const FProperty* InProperty) const
 
 	const FName PropertyName = InProperty->GetFName();
 
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, TileSize) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, InterpolationMaterial) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, AfterInterpolationMaterial) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, SuperSamplingMaterial) ||
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume) ||
 		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, PostProcessingMaterial))
 	{
 		return !GetWorld() || !GetWorld()->IsGameWorld();
@@ -305,15 +256,6 @@ void AFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEve
 
 	if (GetWorld() && GetWorld()->IsGameWorld())
 	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, MinimalVisibility))
-		{
-			if (IsValid(AfterInterpolationMID))
-			{
-				AfterInterpolationMID->SetScalarParameterValue(Names::FOW_MinimalVisibility, MinimalVisibility);
-			}
-			return;
-		}
-
 		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, NotVisibleRegionBrightness))
 		{
 			if (IsValid(PostProcessingMID))
@@ -322,24 +264,11 @@ void AFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEve
 			}
 			return;
 		}
-
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, ApproximateSecondsToAbsorbNewSnapshot))
-		{
-			bFirstTick = true;
-			return;
-		}
-
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, VisionBlockingDeltaHeightThreshold))
-		{
-			// This part is obsolete in Mass. The Mass processors will handle vision recalculation.
-			return;
-		}
 	}
 
 	if (GetWorld() && !GetWorld()->IsGameWorld())
 	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, TileSize) ||
-			PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume))
+		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume))
 		{
 			RefreshVolumeInEditor();
 			return;
@@ -354,45 +283,7 @@ void AFogOfWar::Tick(float DeltaSeconds)
 
 	Super::Tick(DeltaSeconds);
 
-	// The vision update loop is now handled by Mass processors.
-	if (UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get())
-	{
-		MinimapSubsystem->SyncFogOfWarRuntimeOptions(
-			VisionBlockingDeltaHeightThreshold,
-			VisionUpdateWorldDistanceThreshold,
-			bDebugStressTestIgnoreCache,
-			bDebugStressTestMinimap);
-	}
-
-	{
-		DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline"), STAT_FogOfWarPipeline, STATGROUP_FogOfWar);
-		{
-			// step 1: creating a snapshot texture from the newest vision data
-			DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline: step 1"), STAT_FogOfWarPipelineStep1, STATGROUP_FogOfWar);
-			WriteVisionDataToTexture(SnapshotTexture);
-		}
-		{
-			// step 2: interpolating the snapshot with the previous visibility texture (to avoid flickering)
-			DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline: step 2"), STAT_FogOfWarPipelineStep2, STATGROUP_FogOfWar);
-			const float NewSnapshotAbsorption = bFirstTick ? 1.0f : FMath::Min(DeltaSeconds / ApproximateSecondsToAbsorbNewSnapshot, 1.0f);
-			InterpolationMID->SetScalarParameterValue(Names::FOW_NewSnapshotAbsorption, NewSnapshotAbsorption);
-			UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, VisibilityTextureRenderTarget, InterpolationMID);
-		}
-		{
-			// step 3: cutting off the minimal visibility
-			DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline: step 3"), STAT_FogOfWarPipelineStep3, STATGROUP_FogOfWar);
-			UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, PreFinalVisibilityTextureRenderTarget, AfterInterpolationMID);
-		}
-		{
-			// step 4: super sampling
-			DECLARE_SCOPE_CYCLE_COUNTER(TEXT("Pipeline: step 4"), STAT_FogOfWarPipelineStep4, STATGROUP_FogOfWar);
-			UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, FinalVisibilityTextureRenderTarget, SuperSamplingMID);
-		}
-	}
-
 	UpdateSceneGpuVisionSourceTexture();
-
-	bFirstTick = false;
 }
 
 void AFogOfWar::Initialize()
@@ -401,7 +292,6 @@ void AFogOfWar::Initialize()
 	{
 		GridSize = FVector2D::Zero();
 		GridBottomLeftWorldLocation = FVector2D::Zero();
-		GridResolution = {};
 
 		return;
 	}
@@ -417,92 +307,10 @@ void AFogOfWar::Initialize()
 		Bounds.Origin.X - GridSize.X / 2,
 		Bounds.Origin.Y - GridSize.Y / 2
 	};
-	GridResolution = {
-		FMath::CeilToInt32(GridSize.X / TileSize),
-		FMath::CeilToInt32(GridSize.Y / TileSize)
-	};
-
 	if (UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get())
 	{
-		MinimapSubsystem->SyncVisionGridParameters(GridBottomLeftWorldLocation, GridSize, TileSize, GridResolution);
+		MinimapSubsystem->SyncWorldBounds(GridBottomLeftWorldLocation, GridSize);
 	}
-}
-
-void AFogOfWar::CalculateTileHeight(FTile& Tile, FIntPoint TileIJ)
-{
-	FVector2D WorldLocation = UMinimapDataSubsystem::ConvertVisionTileIJToTileCenterWorldLocation_Static(TileIJ);
-	FHitResult HitResult;
-	bool bFoundBlockingHit = GetWorld()->LineTraceSingleByChannel(
-		HitResult,
-		FVector(WorldLocation.X, WorldLocation.Y, 10000.0),
-		FVector(WorldLocation.X, WorldLocation.Y, -10000.0),
-		HeightScanCollisionChannel);
-
-	if (bFoundBlockingHit && HitResult.HasValidHitObjectHandle())
-	{
-		Tile.Height = HitResult.ImpactPoint.Z;
-		return;
-	}
-
-	Tile.Height = -std::numeric_limits<decltype(Tile.Height)>::infinity();
-}
-
-UTexture2D* AFogOfWar::CreateSnapshotTexture()
-{
-	UTexture2D* Texture = UTexture2D::CreateTransient(GridResolution.Y, GridResolution.X, PF_R8);
-	Texture->AddressX = TA_Clamp;
-	Texture->AddressY = TA_Clamp;
-	Texture->SRGB = 0;
-#if WITH_EDITORONLY_DATA
-	if (bDebugFilterNearest)
-	{
-		Texture->Filter = TF_Nearest;
-	}
-#endif
-
-	return Texture;
-}
-
-UTextureRenderTarget2D* AFogOfWar::CreateRenderTarget()
-{
-	UTextureRenderTarget2D* RenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, GridResolution.Y, GridResolution.X, RTF_R8);
-	RenderTarget->AddressX = TA_Clamp;
-	RenderTarget->AddressY = TA_Clamp;
-	RenderTarget->SRGB = 0;
-#if WITH_EDITORONLY_DATA
-	if (bDebugFilterNearest)
-	{
-		RenderTarget->Filter = TF_Nearest;
-	}
-#endif
-
-	return RenderTarget;
-}
-
-void AFogOfWar::WriteVisionDataToTexture(UTexture2D* Texture)
-{
-	const UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get();
-	if (!MinimapSubsystem || !MinimapSubsystem->IsVisionGridReady())
-	{
-		return;
-	}
-
-	if (TextureDataBuffer.Num() != MinimapSubsystem->VisionTiles.Num())
-	{
-		TextureDataBuffer.SetNum(MinimapSubsystem->VisionTiles.Num());
-	}
-
-	for (int TileIndex = 0; TileIndex < MinimapSubsystem->VisionTiles.Num(); TileIndex++)
-	{
-		const FTile& Tile = MinimapSubsystem->VisionTiles[TileIndex];
-		TextureDataBuffer[TileIndex] = Tile.VisibilityCounter > 0 ? 0xFF : 0;
-	}
-
-	void* TextureData = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
-	FMemory::Memcpy(TextureData, TextureDataBuffer.GetData(), sizeof(TextureDataBuffer[0]) * TextureDataBuffer.Num());
-	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
-	// TODO: likely a better version exists
-	Texture->UpdateResource();
 }
 
 bool AFogOfWar::TryGetCameraGroundFrustum(FVector2D OutFrustumPoints[4]) const
@@ -721,35 +529,4 @@ void AFogOfWar::UpdateSceneGpuVisionSourceTexture()
 
 	PostProcessingMID->SetScalarParameterValue(Names::FOW_SceneGpuVisionSourceCount, static_cast<float>(SceneGpuVisionSourceCount));
 	PostProcessingMID->SetTextureParameterValue(Names::FOW_SceneGpuVisionSourceTexture, SceneGpuVisionSourceTexture);
-}
-
-#if WITH_EDITORONLY_DATA
-void AFogOfWar::WriteHeightmapDataToTexture(UTexture2D* Texture)
-{
-	const UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get();
-	if (!MinimapSubsystem || !MinimapSubsystem->IsVisionGridReady())
-	{
-		return;
-	}
-
-	TArray<uint8> HeightmapDataBuffer;
-	HeightmapDataBuffer.SetNum(MinimapSubsystem->VisionTiles.Num());
-
-	for (int TileIndex = 0; TileIndex < MinimapSubsystem->VisionTiles.Num(); TileIndex++)
-	{
-		const FTile& Tile = MinimapSubsystem->VisionTiles[TileIndex];
-		HeightmapDataBuffer[TileIndex] = FMath::RoundToInt(FMath::Clamp(FMath::GetRangePct(DebugHeightmapLowestZ, DebugHeightmapHightestZ, Tile.Height), 0.0f, 1.0f) * 0xFF);
-	}
-
-	void* TextureData = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
-	FMemory::Memcpy(TextureData, HeightmapDataBuffer.GetData(), sizeof(HeightmapDataBuffer[0]) * HeightmapDataBuffer.Num());
-	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
-	// TODO: likely a better version exists
-	Texture->UpdateResource();
-}
-#endif
-
-bool AFogOfWar::IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight)
-{
-	return PotentialObstacleHeight - ObserverHeight > VisionBlockingDeltaHeightThreshold;
 }

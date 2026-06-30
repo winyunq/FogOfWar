@@ -25,7 +25,7 @@ This file records integration decisions and pitfalls that should survive across 
 ## Vision Update Pitfalls
 
 - `UMassLocationChangedObserver` must not blindly mark all vision providers every frame in normal mode.
-- Debug force update is configured on `AFogOfWar` for editor convenience, but Mass processors must read the synced value from `UMinimapDataSubsystem::bDebugStressTestIgnoreCache`.
+- The Mass branch does not use `AFogOfWar` as the debug-force owner for CPU tile scene fog. Scene fog is GPU circle-source based; any remaining CPU tile debug flags belong to legacy/minimap code paths.
 - Normal mode should use FogOfWar's cached `FMassPreviousVisionFragment::PreviousVisionData` to decide whether an entity needs a vision refresh.
 - The observer intentionally avoids relying on MassBattle `FLocating::PreLocation` timing. MassBattle updates `PreLocation` inside its own movement/grid registration flow, so cross-plugin ordering can make it a poor external change detector.
 - `AFogOfWar::VisionUpdateWorldDistanceThreshold` is optional and is synced into `UMinimapDataSubsystem::VisionUpdateWorldDistanceThreshold`. `0` means grid/cache boundary comparison only.
@@ -62,9 +62,10 @@ This file records integration decisions and pitfalls that should survive across 
 
 ## Scene Fog
 
-- The current scene fog implementation is CPU tile/DDA based and outputs a post-process visibility texture.
-- Runtime CPU visibility data now lives in `UMinimapDataSubsystem::VisionTiles`; `AFogOfWar` is the rendering/setup adapter, not the authoritative runtime data owner.
-- The desired long-term RTS scene fog is different: camera-visible scene fog should be GPU-driven, using visible allied/friendly units as reveal sources inside the camera region.
+- The Mass branch scene fog implementation is GPU circle-source based. The old CPU tile/DDA scene pipeline is not the main path.
+- `AFogOfWar` must not run the old `SnapshotTexture -> Interpolation -> AfterInterpolation -> SuperSampling` render-target chain for scene fog.
+- `AFogOfWar` does not activate `UMinimapDataSubsystem::VisionTiles` for scene fog. The CPU tile grid may remain as legacy data/API, but it must not be used for the main camera fog path.
+- Camera-visible scene fog is GPU-driven, using visible allied/friendly units as reveal sources inside the camera region.
 - Scene fog and minimap fog are separate rendering problems. Do not reuse minimap unit/color/tile data as the source for scene post-process fog.
 - `AFogOfWar` owns the scene post-process bridge. It can upload `FOW_SceneGpuVisionSourceTexture` with texels `(WorldX, WorldY, SightRadius, Reserved)`, plus `FOW_SceneGpuVisionSourceCount` and `FOW_EnableSceneGpuVisionSources`. The post-process material can use those sources to decide per scene pixel whether the pixel is covered by a reveal radius.
 - The final scene fog visibility test is circular. AABB/bounds are allowed only as CPU broad-phase query windows for HashGrid and camera-frustum candidate collection; they must not become the final reveal shape.

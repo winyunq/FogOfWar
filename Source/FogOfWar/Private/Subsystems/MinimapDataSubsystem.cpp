@@ -132,6 +132,18 @@ void UMinimapDataSubsystem::SyncVisionGridParameters(const FVector2D& InGridOrig
 	}
 }
 
+void UMinimapDataSubsystem::SyncWorldBounds(const FVector2D& InGridOrigin, const FVector2D& InGridSize)
+{
+	bVisionGridActive = false;
+	GridBottomLeftWorldLocation = InGridOrigin;
+	GridSize = InGridSize;
+
+	if (MinimapGridResolution.X > 0 && MinimapGridResolution.Y > 0 && GridSize.X > 0.0f && GridSize.Y > 0.0f)
+	{
+		MinimapTileSize = FVector2D(GridSize.X / MinimapGridResolution.X, GridSize.Y / MinimapGridResolution.Y);
+	}
+}
+
 void UMinimapDataSubsystem::SetVisionGridActive(bool bInActive)
 {
 	bVisionGridActive = bInActive && IsVisionGridReady();
