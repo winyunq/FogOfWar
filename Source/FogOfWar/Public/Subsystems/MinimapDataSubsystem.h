@@ -435,6 +435,7 @@ public:
 	static FORCEINLINE FVector2D ConvertMinimapTileIJToWorldLocation_Static(const FIntPoint& TileIJ);
 	
 private:
+	bool ApplyMinimapGridFromConfigFile();
 	bool ApplyMinimapGridFromRangeConfig();
 	bool ApplyMinimapGridFromCurrentBounds();
 	bool TryAutoResolveMinimapGridFromHashGrid();

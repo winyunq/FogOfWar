@@ -2,6 +2,7 @@
 
 #include "Subsystems/MinimapDataSubsystem.h"
 #include "FogOfWarMassBinding.h"
+#include "Minimap/MapBoundsConfig.h"
 #include "Subsystems/MassBattleHashGridSubsystem.h"
 #include "Minimap/MinimapRangeConfig.h"
 #include "MassEntitySubsystem.h"
@@ -89,7 +90,11 @@ void UMinimapDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 	SingletonInstance = this;
 	RebuildTeamDisplayColorCache();
-	bMinimapGridInitialized = ApplyMinimapGridFromRangeConfig();
+	bMinimapGridInitialized = ApplyMinimapGridFromConfigFile();
+	if (!bMinimapGridInitialized)
+	{
+		bMinimapGridInitialized = ApplyMinimapGridFromRangeConfig();
+	}
 	if (!bMinimapGridInitialized)
 	{
 		bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
@@ -227,6 +232,35 @@ bool UMinimapDataSubsystem::TryAutoResolveMinimapGridFromHashGrid()
 	}
 	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Auto-resolved minimap bounds from HashGrid: Origin=%s, Size=%s, Resolution=%s"),
 		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString(), *MinimapGridResolution.ToString());
+
+	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
+	return bMinimapGridInitialized;
+}
+
+bool UMinimapDataSubsystem::ApplyMinimapGridFromConfigFile()
+{
+	FFogOfWarMapBoundsConfig Config;
+	if (!FFogOfWarMapBoundsConfig::LoadForWorld(GetWorld(), Config))
+	{
+		return false;
+	}
+
+	GridBottomLeftWorldLocation = Config.GridOrigin;
+	GridSize = Config.GridSize;
+	bMinimapResolutionExplicitlySet = IsValidMinimapResolution(Config.MinimapGridResolution);
+	MinimapGridResolution = bMinimapResolutionExplicitlySet ? Config.MinimapGridResolution : FIntPoint::ZeroValue;
+
+	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Initialized minimap bounds from FogOfWarMapBounds.ini: Origin=%s Size=%s Resolution=%s"),
+		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString(), *MinimapGridResolution.ToString());
+
+	if (UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld()))
+	{
+		if (HashGrid->AgentGrid.Num() == 0)
+		{
+			HashGrid->GridOrigin.X = GridBottomLeftWorldLocation.X;
+			HashGrid->GridOrigin.Y = GridBottomLeftWorldLocation.Y;
+		}
+	}
 
 	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
 	return bMinimapGridInitialized;

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "MassEntityTypes.h"
+#include "MassEntityQuery.h"
 #include "Components/Image.h"
 #include "MinimapWidget.generated.h"
 

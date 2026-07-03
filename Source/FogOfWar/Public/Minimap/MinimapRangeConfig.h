@@ -51,6 +51,10 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Minimap")
 	bool HasExplicitGridResolution() const { return GridResolution.X > 0 && GridResolution.Y > 0; }
 
+	/** Writes this actor's bounds into Config/FogOfWarMapBounds.ini so runtime plugins can share bounds without referencing this Actor. */
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Minimap|Map Bounds")
+	bool ExportMapBoundsConfig() const;
+
 private:
 	void UpdateVisuals();
 };
