@@ -271,6 +271,53 @@ FogOfWar 核心模块不强制依赖 `OpenRTSCamera`。`URTSMinimapControllerWid
 
 `MassBattleMinimap` 的范围配置代码已并入 FogOfWar，运行时使用 `AMinimapRangeConfig`（显示名“小地图范围配置”）。未放置该配置，且没有显式设置小地图分辨率时，小地图会按 MassBattle HashGrid cell 自动推导边界和分辨率。
 
+#### 5.4.1 Shared Map Bounds INI
+
+FogOfWar 暂时拥有共享地图边界协议。`AMinimapRangeConfig` 可以把当前 Box 范围导出到：
+
+```text
+<Project>/Config/FogOfWarMapBounds.ini
+```
+
+该文件是项目级配置文件，但条目按关卡名分 section：
+
+```ini
+[MapBounds.MapName]
+OriginX=0
+OriginY=0
+SizeX=409600
+SizeY=409600
+CenterX=204800
+CenterY=204800
+ExtentX=204800
+ExtentY=204800
+MapOverflowUU=0
+MinimapResolutionX=1024
+MinimapResolutionY=1024
+HashGridCellSizeX=300
+HashGridCellSizeY=300
+HashGridResolutionX=1366
+HashGridResolutionY=1366
+
+[MapBounds.Default]
+OriginX=0
+OriginY=0
+SizeX=409600
+SizeY=409600
+```
+
+运行时读取顺序：
+
+1. `MapBounds.<当前关卡名>`。
+2. `MapBounds.Default`。
+3. 关卡内放置的 `AMinimapRangeConfig`。
+4. 子系统当前已有 bounds。
+5. 从 MassBattle HashGrid 推导的 fallback。
+
+`OpenRTSCamera` 通过相同文件名和 section 名读取这个协议，不链接 `FogOfWar` C++ 模块。这是当前镜头边界和小地图边界之间的桥。
+
+作用域说明：当前实现不是把边界写进 `.umap`，而是在一个项目配置文件内维护每个关卡的 section。迁移关卡到其他项目时，需要同步迁移对应 INI section。若后续需要“真正伴随关卡资产”，应改为 WorldSettings 字段、关卡伴随 DataAsset，或在保存关卡时生成同名配置资产。
+
 小地图最简使用方式：
 
 1. 创建一个继承 `UMinimapWidget` 的 UMG。
