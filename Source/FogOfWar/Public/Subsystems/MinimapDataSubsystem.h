@@ -257,7 +257,7 @@ public:
 	bool IsBlockingVision(float ObserverHeight, float PotentialObstacleHeight) const;
 
 	/**
-	 * 手动初始化小地图网格参数 (通常由 AMinimapVolume 等 Actor 调用)。
+	 * 手动初始化小地图网格参数。
 	 * @param InGridOrigin 世界坐标原点 (GridBottomLeft)
 	 * @param InGridSize 世界空间总尺寸
 	 * @param InResolution 纹理分辨率 (Tile Count)
@@ -271,14 +271,15 @@ public:
 	//~ Common Grid Properties (Shared by Vision and Minimap)
 	
 	// 世界空间下的网格总尺寸 (World Size)
-	// 如果不使用 AFogOfWar，需手动配置此项以定义小地图覆盖范围。
+	// 如果未配置，会尝试从 MassBattle HashGrid 自动推导边界；
+	// 小地图 UI 启用时在首次更新时会自动初始化。
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Config")
-	FVector2D GridSize = FVector2D(409600.0f, 409600.0f); // Default 4km x 4km
+	FVector2D GridSize = FVector2D::ZeroVector;
 
 	// 网格左下角的世界坐标 (World Origin)
-	// 通常为 -(GridSize / 2) 以使 (0,0) 为中心。
+	// 未配置时会按 HashGrid 边界自动赋值。
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Config")
-	FVector2D GridBottomLeftWorldLocation = FVector2D(-204800.0f, -204800.0f);
+	FVector2D GridBottomLeftWorldLocation = FVector2D::ZeroVector;
 	
 	//~ Vision Grid Properties (High-Resolution for Fog of War calculation)
 	
@@ -309,9 +310,9 @@ public:
 	
 	//~ Minimap Grid Properties (Low-Resolution for UI)
 	
-	// 小地图网格的分辨率
+	// 小地图网格的分辨率。Zero 表示按 MinimapRangeConfig 或 MassBattle HashGrid 自动推导。
     UPROPERTY(Transient)
-    FIntPoint MinimapGridResolution = FIntPoint(256, 256);
+    FIntPoint MinimapGridResolution = FIntPoint::ZeroValue;
 
 	// 小地图单瓦片尺寸
 	UPROPERTY(Transient)
@@ -342,6 +343,9 @@ public:
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance")
 	bool bWriteMinimapPerformanceCsv = true;
+
+	UPROPERTY(Transient)
+	bool bMinimapGridInitialized = false;
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category="Minimap|Performance", meta=(ClampMin="0.0", UIMin="0.0"))
 	float MinimapPerformanceLogInterval = 2.0f;
@@ -431,6 +435,12 @@ public:
 	static FORCEINLINE FVector2D ConvertMinimapTileIJToWorldLocation_Static(const FIntPoint& TileIJ);
 	
 private:
+	bool ApplyMinimapGridFromRangeConfig();
+	bool ApplyMinimapGridFromCurrentBounds();
+	bool TryAutoResolveMinimapGridFromHashGrid();
+	bool EnsureMinimapGridReady();
+	bool TryResolveMinimapResolutionFromHashGridCellSize(const FVector2D& BoundsSize, FIntPoint& OutResolution) const;
+
 	// 小地图转换的私有辅助函数
 	static FORCEINLINE FVector2f ConvertWorldSpaceLocationToMinimapGridSpace_Static(const FVector2D& WorldLocation);
 	static FORCEINLINE FIntPoint ConvertMinimapGridLocationToTileIJ_Static(const FVector2f& GridLocation);
@@ -446,6 +456,7 @@ private:
 	FMinimapHashGridPerfStats HashGridPerfAccum;
 	int32 DrawPerfSampleCount = 0;
 	FMinimapDrawPerfStats DrawPerfAccum;
+	bool bMinimapResolutionExplicitlySet = false;
 
 	void RecordHashGridPerfStats(const FMinimapHashGridPerfStats& Stats);
 	void FlushHashGridPerfStats(double CurrentTime);

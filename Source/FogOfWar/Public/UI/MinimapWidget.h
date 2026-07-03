@@ -120,9 +120,9 @@ protected:
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Team")
 	void NormalizeRecommendedTeamColors();
 
-	/** 小地图纹理的分辨率 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance")
-	FIntPoint TextureResolution = FIntPoint(256, 256);
+	/** 小地图纹理的分辨率；Zero 表示使用小地图网格解析出的分辨率。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (DisplayName = "Texture Resolution (0 = Auto)"))
+	FIntPoint TextureResolution = FIntPoint::ZeroValue;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (ClampMin = "0"))
 	int32 DirectQueryThreshold = 1024;
@@ -169,9 +169,14 @@ protected:
 	/** Query for drawing entities directly to the minimap. Configured once on initialization. */
 	FMassEntityQuery DrawQuery;
 
+	FIntPoint GetEffectiveTextureResolution() const;
+	bool EnsureMinimapRenderTarget(const FIntPoint& DesiredResolution);
+
 	// Tick更新频率控制器
 	float TimeSinceLastUpdate = 0.0f;
+	float TimeSinceLastInitRetry = 0.0f;
 
 	// -- Internal Debug --
+	bool bInitPermanentlyFailed = false;
 	bool bIsSuccessfullyInitialized = false;
 };

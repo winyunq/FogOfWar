@@ -84,5 +84,5 @@ This file records integration decisions and pitfalls that should survive across 
 ## Plugin Descriptor Pitfalls
 
 - If `FogOfWar.Build.cs` depends on modules from another plugin, `FogOfWar.uplugin` must also list that plugin in its `Plugins` array. Otherwise UBT can compile inside the project but the plugin is fragile when packaged, migrated, or enabled independently.
-- Current explicit plugin dependencies: `MassBattle`, `MassGameplay`, `MassBattleMinimap`, `EnhancedInput`, and `OpenRTSCamera`.
+- Current explicit plugin dependencies: `MassBattle`, `MassGameplay`, and `EnhancedInput`. `MassBattleMinimap` code needed by FogOfWar is integrated as `AMinimapRangeConfig`; `OpenRTSCamera` is accessed only through optional reflection.
 - Default command tags used by UI assets/subsystems must exist in `Config/DefaultGameplayTags.ini`. Runtime code that calls `RequestGameplayTag` before native registration can still trigger editor ensures.

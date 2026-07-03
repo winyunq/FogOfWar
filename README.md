@@ -257,16 +257,19 @@ Content/Core/Materials/M_FogOfWarSuperSampling.uasset
 
 ### 5.4 Mass 分支补充说明
 
-GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本依赖以下插件：
+GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本显式依赖以下插件：
 
 1. `MassBattle`
-2. `MassBattleMinimap`
+2. `MassGameplay`
+3. `EnhancedInput`
 
 还依赖 UE 的 Mass、UMG、Slate、RHI、RenderCore、EnhancedInput 等模块；具体以 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs` 为准。
 
 当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。`AFogOfWar` 场景主画面只需要配置 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
 
 FogOfWar 核心模块不强制依赖 `OpenRTSCamera`。`URTSMinimapControllerWidget` 只广播小地图点击/拖动得到的世界坐标；如果项目使用 RTS 相机，请在项目侧或相机插件侧绑定 `OnWorldLocationRequested` 并执行相机跳转。
+
+`MassBattleMinimap` 的范围配置代码已并入 FogOfWar，运行时使用 `AMinimapRangeConfig`（显示名“小地图范围配置”）。未放置该配置，且没有显式设置小地图分辨率时，小地图会按 MassBattle HashGrid cell 自动推导边界和分辨率。
 
 小地图最简使用方式：
 

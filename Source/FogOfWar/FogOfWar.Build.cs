@@ -29,7 +29,6 @@ public class FogOfWar : ModuleRules
 				"EnhancedInput",
 				"MassAPI",
 				"MassBattle",
-				"MassBattleMinimap",
 				"MassCommon",
 				"MassCore",
 				"MassEntity",

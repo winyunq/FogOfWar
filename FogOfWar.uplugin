@@ -31,15 +31,7 @@
 			"Enabled": true
 		},
 		{
-			"Name": "MassBattleMinimap",
-			"Enabled": true
-		},
-		{
 			"Name": "EnhancedInput",
-			"Enabled": true
-		},
-		{
-			"Name": "OpenRTSCamera",
 			"Enabled": true
 		}
 	]

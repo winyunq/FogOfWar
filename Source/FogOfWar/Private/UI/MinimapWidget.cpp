@@ -21,11 +21,18 @@ DEFINE_LOG_CATEGORY_STATIC(LogMinimapWidget, Log, All);
 
 namespace
 {
+	constexpr int32 FallbackMinimapTextureResolution = 256;
+
 	struct FMinimapCanvasDot
 	{
 		FVector2D Position = FVector2D::ZeroVector;
 		FLinearColor Color = FLinearColor::White;
 	};
+
+	FORCEINLINE bool IsValidTextureResolution(const FIntPoint& Resolution)
+	{
+		return Resolution.X > 0 && Resolution.Y > 0;
+	}
 }
 
 // 辅助函数：创建一个支持CPU访问的动态数据纹理
@@ -45,15 +52,63 @@ UTexture2D* CreateDynamicDataTexture(UObject* Outer, int32 Width, int32 Height, 
 	return Texture;
 }
 
+FIntPoint UMinimapWidget::GetEffectiveTextureResolution() const
+{
+	if (IsValidTextureResolution(TextureResolution))
+	{
+		return TextureResolution;
+	}
+
+	if (MinimapDataSubsystem && IsValidTextureResolution(MinimapDataSubsystem->MinimapGridResolution))
+	{
+		return MinimapDataSubsystem->MinimapGridResolution;
+	}
+
+	return FIntPoint(FallbackMinimapTextureResolution, FallbackMinimapTextureResolution);
+}
+
+bool UMinimapWidget::EnsureMinimapRenderTarget(const FIntPoint& DesiredResolution)
+{
+	const FIntPoint SafeResolution(
+		FMath::Max(1, DesiredResolution.X),
+		FMath::Max(1, DesiredResolution.Y));
+
+	if (MinimapRenderTarget &&
+		MinimapRenderTarget->SizeX == SafeResolution.X &&
+		MinimapRenderTarget->SizeY == SafeResolution.Y)
+	{
+		return true;
+	}
+
+	MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
+		this,
+		SafeResolution.X,
+		SafeResolution.Y,
+		ETextureRenderTargetFormat::RTF_RGBA8);
+
+	if (MinimapRenderTarget && MinimapImage)
+	{
+		FSlateBrush Brush = MinimapImage->GetBrush();
+		Brush.SetResourceObject(MinimapRenderTarget);
+		MinimapImage->SetBrush(Brush);
+	}
+
+	return MinimapRenderTarget != nullptr;
+}
+
 bool UMinimapWidget::InitializeMinimapSystem()
 {
-	bIsSuccessfullyInitialized = false;
+	if (bIsSuccessfullyInitialized)
+	{
+		return true;
+	}
 
 	if (!MinimapDataSubsystem)
 	{
-		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: MinimapDataSubsystem not found."));
 		return false;
 	}
+
+	bIsSuccessfullyInitialized = false;
 
 	MinimapDataSubsystem->SetMinimapResolution(TextureResolution);
 	MinimapDataSubsystem->SyncMinimapDisplayOptions(
@@ -67,9 +122,12 @@ bool UMinimapWidget::InitializeMinimapSystem()
 		CombatColorFlashHz,
 		DefaultUnitPixelRadius);
 
-	if (!MinimapRenderTarget)
+	const FIntPoint EffectiveTextureResolution = GetEffectiveTextureResolution();
+	if (!EnsureMinimapRenderTarget(EffectiveTextureResolution))
 	{
-		MinimapRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(this, TextureResolution.X, TextureResolution.Y, ETextureRenderTargetFormat::RTF_RGBA8);
+		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: MinimapRenderTarget could not be created."));
+		bInitPermanentlyFailed = true;
+		return false;
 	}
 	if (!VisionDataTexture)
 	{
@@ -87,6 +145,7 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	if (!MinimapMaterial)
 	{
 		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: MinimapMaterial is not set."));
+		bInitPermanentlyFailed = true;
 		return false;
 	}
 
@@ -95,6 +154,7 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	if (!MinimapRenderTarget || !VisionDataTexture || !IconDataTexture || !IconColorTexture || !MinimapMaterialInstance)
 	{
 		UE_LOG(LogMinimapWidget, Error, TEXT("InitializeMinimapSystem failed: A required resource could not be created."));
+		bInitPermanentlyFailed = true;
 		return false;
 	}
 	
@@ -106,10 +166,15 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("UnitColorDataTexture"), IconColorTexture);
 
 	// Use Subsystem Data for Bounds
+	const int32 MaterialTexX = FMath::Max(1, EffectiveTextureResolution.X);
+	const int32 MaterialTexY = FMath::Max(1, EffectiveTextureResolution.Y);
+	const FVector2D MaterialUnitWorldSize(
+		MinimapDataSubsystem->GridSize.X / static_cast<float>(MaterialTexX),
+		MinimapDataSubsystem->GridSize.Y / static_cast<float>(MaterialTexY));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(MinimapDataSubsystem->GridBottomLeftWorldLocation.X, MinimapDataSubsystem->GridBottomLeftWorldLocation.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridWorldSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
-	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MinimapDataSubsystem->GridSize.X/TextureResolution.X, MinimapDataSubsystem->GridSize.Y/TextureResolution.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MaterialUnitWorldSize.X, MaterialUnitWorldSize.Y, 0));
 
 	// Configure Mass Queries once.
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
@@ -174,6 +239,9 @@ void UMinimapWidget::NormalizeRecommendedTeamColors()
 void UMinimapWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	bIsSuccessfullyInitialized = false;
+	bInitPermanentlyFailed = false;
+	TimeSinceLastInitRetry = 0.0f;
 
 	// Get Subsystem reference generally
 	MinimapDataSubsystem = UMinimapDataSubsystem::Get();
@@ -213,6 +281,34 @@ void UMinimapWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 	if (!bIsSuccessfullyInitialized)
 	{
+		if (bInitPermanentlyFailed)
+		{
+			return;
+		}
+
+		TimeSinceLastInitRetry += InDeltaTime;
+		const float InitRetryInterval = 0.2f;
+		if (TimeSinceLastInitRetry < InitRetryInterval)
+		{
+			return;
+		}
+		TimeSinceLastInitRetry = 0.0f;
+
+		if (!MinimapDataSubsystem)
+		{
+			MinimapDataSubsystem = UMinimapDataSubsystem::Get();
+		}
+		if (!MinimapDataSubsystem)
+		{
+			return;
+		}
+
+		if (!InitializeMinimapSystem() && MinimapDataSubsystem)
+		{
+			bInitPermanentlyFailed = true;
+			return;
+		}
+
 		return;
 	}
 
@@ -248,10 +344,21 @@ void UMinimapWidget::UpdateMinimapTexture()
 		return;
 	}
 
+	const FIntPoint EffectiveTextureResolution = GetEffectiveTextureResolution();
+	if (!EnsureMinimapRenderTarget(EffectiveTextureResolution))
+	{
+		return;
+	}
+
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridBottomLeftWorldLocation"), FLinearColor(MinimapDataSubsystem->GridBottomLeftWorldLocation.X, MinimapDataSubsystem->GridBottomLeftWorldLocation.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridWorldSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
-	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MinimapDataSubsystem->MinimapTileSize.X, MinimapDataSubsystem->MinimapTileSize.Y, 0));
+	const int32 MaterialTexX = FMath::Max(1, EffectiveTextureResolution.X);
+	const int32 MaterialTexY = FMath::Max(1, EffectiveTextureResolution.Y);
+	const FVector2D MaterialUnitWorldSize(
+		MinimapDataSubsystem->GridSize.X / static_cast<float>(MaterialTexX),
+		MinimapDataSubsystem->GridSize.Y / static_cast<float>(MaterialTexY));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MaterialUnitWorldSize.X, MaterialUnitWorldSize.Y, 0));
 
 	// Always use the optimized Tile-based Rendering (Path B)
 	// This relies on the Subsystem populating MinimapTiles from the HashGrid each frame.
@@ -352,6 +459,14 @@ void UMinimapWidget::DrawInMassSize()
 		return;
 	}
 
+	const FIntPoint GridResolution = MinimapDataSubsystem->MinimapGridResolution;
+	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
+	if (GridResolution.X <= 0 || GridResolution.Y <= 0 || Tiles.Num() == 0)
+	{
+		return;
+	}
+
+	const FIntPoint EffectiveTextureResolution = GetEffectiveTextureResolution();
 	const double TotalStartTime = FPlatformTime::Seconds();
 	FMinimapDrawPerfStats DrawStats;
 
@@ -372,8 +487,6 @@ void UMinimapWidget::DrawInMassSize()
 	DrawStats.LockTexturesMs = static_cast<float>((FPlatformTime::Seconds() - LockStartTime) * 1000.0);
 
 	// --- 2. Read from Tile Cache and Write to Pointers ---
-	const FIntPoint GridResolution = MinimapDataSubsystem->MinimapGridResolution;
-	const TArray<FMinimapTile>& Tiles = MinimapDataSubsystem->MinimapTiles;
 	DrawStats.SourceTilesScanned = Tiles.Num();
 	int32 ActiveTileCount = 0;
 	int32 MaterialUnitCount = 0;
@@ -411,8 +524,8 @@ void UMinimapWidget::DrawInMassSize()
 			if (bDrawUnitsWithCanvasOverlay)
 			{
 				const FVector2D DotPosition(
-					((static_cast<float>(TileIJ.Y) + 0.5f) / static_cast<float>(GridResolution.Y)) * static_cast<float>(TextureResolution.X),
-					(1.0f - ((static_cast<float>(TileIJ.X) + 0.5f) / static_cast<float>(GridResolution.X))) * static_cast<float>(TextureResolution.Y));
+					((static_cast<float>(TileIJ.Y) + 0.5f) / static_cast<float>(GridResolution.Y)) * static_cast<float>(EffectiveTextureResolution.X),
+					(1.0f - ((static_cast<float>(TileIJ.X) + 0.5f) / static_cast<float>(GridResolution.X))) * static_cast<float>(EffectiveTextureResolution.Y));
 				CanvasDots.Add({ DotPosition, Tile.Color });
 			}
 			ActiveTileCount++;
