@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Winyunq FogOfWar 文档</title>
+  <meta name="description" content="Winyunq FogOfWar 是面向 Unreal Engine MassBattle 的高性能战争迷雾与小地图插件文档。">
+  <meta name="theme-color" content="#16211d">
+  <meta property="og:title" content="Winyunq FogOfWar 文档">
+  <meta property="og:description" content="GPU 圆形视野源后处理、MassBattle HashGrid 小地图、共享地图边界协议。">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="Resources/Icon128.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到正文</a>
+
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="FogOfWar 文档首页">
+      <img src="Resources/Icon128.png" alt="" width="36" height="36">
+      <span>
+        <strong>FogOfWar</strong>
+        <small>Unreal Engine MassBattle Plugin</small>
+      </span>
+    </a>
+    <nav class="topnav" aria-label="主导航">
+      <a href="#quick-start">快速接入</a>
+      <a href="#scene-fog">场景迷雾</a>
+      <a href="#minimap">小地图</a>
+      <a href="https://github.com/winyunq/FogOfWar">GitHub</a>
+    </nav>
+  </header>
+
+  <div class="page-shell">
+    <aside class="sidebar" aria-label="文档目录">
+      <div class="search-panel">
+        <label for="doc-search">搜索文档</label>
+        <input id="doc-search" type="search" placeholder="输入 API、资产或参数名" autocomplete="off">
+      </div>
+      <nav class="toc">
+        <a href="#overview">概览</a>
+        <a href="#requirements">依赖</a>
+        <a href="#quick-start">快速接入</a>
+        <a href="#assets-api">资产与 API</a>
+        <a href="#scene-fog">场景迷雾</a>
+        <a href="#material-contract">材质契约</a>
+        <a href="#minimap">小地图</a>
+        <a href="#map-bounds">地图边界</a>
+        <a href="#performance">性能记录</a>
+        <a href="#troubleshooting">排错</a>
+      </nav>
+      <div class="release-note">
+        <span>发布分支</span>
+        <strong>Document</strong>
+        <span>内容基线</span>
+        <strong>Mass branch</strong>
+        <span>更新日期</span>
+        <strong>2026-07-04</strong>
+      </div>
+    </aside>
+
+    <main id="content" class="content">
+      <section id="overview" class="doc-section intro" data-search="overview 概览 fogofwar massbattle gpu hashgrid minimap">
+        <div class="intro-copy">
+          <p class="eyebrow">战争迷雾 · MassBattle · GPU Post Process</p>
+          <h1>面向大规模 RTS 战场的 FogOfWar 文档</h1>
+          <p class="lead">
+            Winyunq FogOfWar 使用 MassBattle HashGrid 作为单位位置真理源，用 GPU 圆形视野源后处理绘制玩家主画面迷雾，并提供基于 HashGrid 降采样的小地图数据链路。
+          </p>
+          <div class="quick-facts" aria-label="关键特性">
+            <div>
+              <span>场景显示</span>
+              <strong>GPU 圆形视野源</strong>
+            </div>
+            <div>
+              <span>空间数据</span>
+              <strong>MassBattle HashGrid</strong>
+            </div>
+            <div>
+              <span>小地图</span>
+              <strong>UMinimapWidget</strong>
+            </div>
+          </div>
+        </div>
+        <div class="fog-visual" aria-label="战争迷雾可视化示意">
+          <div class="fog-toolbar">
+            <span>Scene Fog</span>
+            <span>4096 sources max</span>
+          </div>
+          <div class="grid-map">
+            <span class="unit unit-a"></span>
+            <span class="unit unit-b"></span>
+            <span class="unit unit-c"></span>
+            <span class="vision vision-a"></span>
+            <span class="vision vision-b"></span>
+            <span class="vision vision-c"></span>
+            <span class="path-line"></span>
+          </div>
+          <div class="fog-legend">
+            <span><i class="legend-dot green"></i>Vision source</span>
+            <span><i class="legend-dot amber"></i>HashGrid cell</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="requirements" class="doc-section" data-search="requirements 依赖 plugin modules unreal ue5 massbattle massgameplay enhancedinput niagara">
+        <div class="section-heading">
+          <p class="eyebrow">Requirements</p>
+          <h2>依赖与启用条件</h2>
+        </div>
+        <div class="two-column">
+          <div>
+            <h3>插件依赖</h3>
+            <p>当前 Mass 集成版本显式启用这些插件。请先确认宿主项目已经安装并可编译它们。</p>
+            <ul class="check-list">
+              <li><code>MassBattle</code></li>
+              <li><code>MassGameplay</code></li>
+              <li><code>EnhancedInput</code></li>
+              <li><code>Niagara</code></li>
+            </ul>
+          </div>
+          <div>
+            <h3>模块依赖</h3>
+            <p>构建脚本还使用 UE Mass、UMG、Slate、RHI、RenderCore 等模块。最终依赖以仓库内 <code>FogOfWar.uplugin</code> 和 <code>Source/FogOfWar/FogOfWar.Build.cs</code> 为准。</p>
+            <div class="inline-code-list">
+              <code>MassEntity</code>
+              <code>MassRepresentation</code>
+              <code>MassSpawner</code>
+              <code>UMG</code>
+              <code>RenderCore</code>
+              <code>RHI</code>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="quick-start" class="doc-section" data-search="quick start 快速接入 bp_fogofwar umassvisiontrait minimapwidget postprocessingmaterial">
+        <div class="section-heading">
+          <p class="eyebrow">Quick Start</p>
+          <h2>四步接入主画面迷雾</h2>
+        </div>
+        <ol class="step-list">
+          <li>
+            <span class="step-index">1</span>
+            <div>
+              <h3>放置迷雾 Actor</h3>
+              <p>在关卡中放置 <code>Content/Core/BP_FogOfWar.uasset</code>，或直接放置 <code>AFogOfWar</code>。未设置 <code>GridVolume</code> 时，Actor 会以自身位置和 <code>FallbackGridSize</code> 建立默认世界范围。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-index">2</span>
+            <div>
+              <h3>绑定后处理材质</h3>
+              <p>将 <code>PostProcessingMaterial</code> 指向 <code>Content/Core/Materials/M_FogOfWar.uasset</code>，保持 <code>bAutoActivate=true</code>，或在蓝图/C++ 中手动调用 <code>Activate()</code>。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-index">3</span>
+            <div>
+              <h3>给 Mass 原型添加视野 Trait</h3>
+              <p>在 Mass 实体原型中添加 <code>UMassVisionTrait</code>，设置 <code>SightRadius &gt; 0</code>。需要出现在小地图中的单位保留 <code>bShouldBeRepresentedOnMinimap=true</code>。</p>
+            </div>
+          </li>
+          <li>
+            <span class="step-index">4</span>
+            <div>
+              <h3>运行并查看数据</h3>
+              <p>运行时 <code>AFogOfWar</code> 会从 MassBattle HashGrid 收集相机相关的视野源，上传到后处理材质使用的数据纹理，并写入性能 CSV。</p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section id="assets-api" class="doc-section" data-search="assets api 资产 afogofwar umassvisiontrait uminimapwidget uminimapdatasubsystem aminimaprangeconfig urtsminimapcontrollerwidget">
+        <div class="section-heading">
+          <p class="eyebrow">Assets & API</p>
+          <h2>常用资产与运行时类</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>名称</th>
+                <th>类型</th>
+                <th>用途</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>BP_FogOfWar</code></td>
+                <td>Blueprint Actor</td>
+                <td>可直接拖入关卡的主画面战争迷雾 Actor。</td>
+              </tr>
+              <tr>
+                <td><code>M_FogOfWar</code></td>
+                <td>Post Process Material</td>
+                <td>读取 GPU 圆形视野源，决定主画面像素是否揭雾。</td>
+              </tr>
+              <tr>
+                <td><code>MinimapTarget</code></td>
+                <td>UMG/RenderTarget Material</td>
+                <td>读取小地图数据纹理，绘制单位与视野信息。</td>
+              </tr>
+              <tr>
+                <td><code>AFogOfWar</code></td>
+                <td>C++ Actor</td>
+                <td>激活迷雾、同步世界范围、维护场景 GPU 视野源纹理。</td>
+              </tr>
+              <tr>
+                <td><code>UMassVisionTrait</code></td>
+                <td>Mass Trait</td>
+                <td>为 Mass 实体写入视野半径、迷雾标签和小地图标记。</td>
+              </tr>
+              <tr>
+                <td><code>UMinimapWidget</code></td>
+                <td>UMG Widget</td>
+                <td>自动创建小地图 RenderTarget，并驱动 HashGrid 降采样更新。</td>
+              </tr>
+              <tr>
+                <td><code>UMinimapDataSubsystem</code></td>
+                <td>Mass Subsystem</td>
+                <td>统一保存小地图网格、颜色表、坐标转换和性能统计。</td>
+              </tr>
+              <tr>
+                <td><code>AMinimapRangeConfig</code></td>
+                <td>Actor</td>
+                <td>定义地图逻辑边界，可导出共享边界 INI。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="scene-fog" class="doc-section" data-search="scene fog 场景迷雾 gpu circle source texture fow_scenegpuvisionsourcetexture maxscenegpuvisionsources">
+        <div class="section-heading">
+          <p class="eyebrow">Scene Fog</p>
+          <h2>主画面采用 GPU 圆形视野源</h2>
+        </div>
+        <div class="callout">
+          <strong>当前主路径不再使用旧的多阶段 RT 插值链。</strong>
+          <span><code>InterpolationMaterial</code>、<code>AfterInterpolationMaterial</code>、<code>SuperSamplingMaterial</code> 和 <code>FOW_FinalVisibilityTexture</code> 不再是主画面迷雾路径。</span>
+        </div>
+        <div class="two-column">
+          <div>
+            <h3>CPU 只做收集</h3>
+            <p>插件从 MassBattle HashGrid 中遍历相机相关区域，读取真实单位位置与 <code>SightRadius</code>，将可影响当前画面的圆形视野源压缩为一条 RGBA32F 数据纹理。</p>
+          </div>
+          <div>
+            <h3>GPU 逐像素判断</h3>
+            <p>后处理材质对当前像素的世界坐标执行圆内测试。像素落入任意视野圆则显示原场景，否则用 <code>NotVisibleRegionBrightness</code> 降暗。</p>
+          </div>
+        </div>
+        <pre><code class="language-hlsl">float Visible = 0.0;
+
+if (FOW_EnableSceneGpuVisionSources &gt; 0.5)
+{
+    [loop]
+    for (int SourceIndex = 0; SourceIndex &lt; (int)FOW_SceneGpuVisionSourceCount; ++SourceIndex)
+    {
+        float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
+        float2 Delta = CurrentPixelWorldXY - Source.xy;
+        float RadiusSq = Source.z * Source.z;
+        Visible = max(Visible, dot(Delta, Delta) &lt;= RadiusSq ? 1.0 : 0.0);
+    }
+}</code></pre>
+      </section>
+
+      <section id="material-contract" class="doc-section" data-search="material contract 材质契约 parameters fow bottomleft gridsize brightness edgewidth post process">
+        <div class="section-heading">
+          <p class="eyebrow">Material Contract</p>
+          <h2>后处理材质参数</h2>
+        </div>
+        <p>自定义后处理材质时，请保持以下参数名与类型一致。推荐使用 Post Process 材质域，Blendable Location 设置为 After Tonemapping。</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>参数</th>
+                <th>类型</th>
+                <th>含义</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>FOW_SceneGpuVisionSourceTexture</code></td>
+                <td>Texture2D RGBA32F</td>
+                <td>每个 texel 为 <code>(WorldX, WorldY, SightRadius, Reserved)</code>。</td>
+              </tr>
+              <tr>
+                <td><code>FOW_SceneGpuVisionSourceCount</code></td>
+                <td>float</td>
+                <td>本帧上传的视野源数量。</td>
+              </tr>
+              <tr>
+                <td><code>FOW_EnableSceneGpuVisionSources</code></td>
+                <td>float</td>
+                <td>大于 0.5 时启用 GPU 圆形揭雾。</td>
+              </tr>
+              <tr>
+                <td><code>FOW_NotVisibleRegionBrightness</code></td>
+                <td>float</td>
+                <td>不可见区域亮度，范围通常为 0 到 1。</td>
+              </tr>
+              <tr>
+                <td><code>FOW_BottomLeftWorldLocation</code></td>
+                <td>float3</td>
+                <td>迷雾世界范围左下角坐标。</td>
+              </tr>
+              <tr>
+                <td><code>FOW_GridSize</code> / <code>FOW_GridWorldSize</code></td>
+                <td>float3</td>
+                <td>迷雾世界范围尺寸。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="minimap" class="doc-section" data-search="minimap 小地图 uminimapwidget minimapimage minimapmaterial updateinterval texture resolution hashgrid">
+        <div class="section-heading">
+          <p class="eyebrow">Minimap</p>
+          <h2>小地图 Widget 接入</h2>
+        </div>
+        <div class="two-column">
+          <div>
+            <h3>UMG 设置</h3>
+            <ol class="compact-list">
+              <li>创建一个继承 <code>UMinimapWidget</code> 的 UMG。</li>
+              <li>在 Widget 中添加 <code>Image</code> 控件，命名为 <code>MinimapImage</code>。</li>
+              <li>将 <code>MinimapMaterial</code> 指向 <code>Content/Core/Materials/MinimapTarget.uasset</code>。</li>
+              <li>添加到 Viewport，Widget 会在 Tick 中按 <code>UpdateInterval</code> 更新。</li>
+            </ol>
+          </div>
+          <div>
+            <h3>数据路径</h3>
+            <p><code>UMinimapWidget</code> 通过 <code>UMinimapDataSubsystem::UpdateMinimapFromHashGrid</code> 遍历 MassBattle HashGrid，把单位位置、颜色、图标半径和视野源写入数据纹理。</p>
+          </div>
+        </div>
+        <pre><code class="language-text">VisionDataTexture / VisionSourceDataTexture: (WorldX, WorldY, Reserved, SightRadiusWorld)
+IconDataTexture / UnitLocationDataTexture:   (WorldX, WorldY, IconPixelRadius, Reserved)
+IconColorTexture / UnitColorDataTexture:     UnitColor
+NumberOfVisionSources
+NumberOfUnits
+GridBottomLeftWorldLocation
+GridSize / GridWorldSize
+UnitSize</code></pre>
+      </section>
+
+      <section id="map-bounds" class="doc-section" data-search="map bounds 地图边界 fogofwarmapbounds ini aminimaprangeconfig openrtscamera resolution hashgrid">
+        <div class="section-heading">
+          <p class="eyebrow">Map Bounds</p>
+          <h2>共享地图边界协议</h2>
+        </div>
+        <p><code>AMinimapRangeConfig</code> 可以将当前 Box 范围导出到 <code>&lt;Project&gt;/Config/FogOfWarMapBounds.ini</code>。条目按关卡名分 section，供 FogOfWar 和相机插件读取同一套边界，不需要 C++ 互相链接。</p>
+        <pre><code class="language-ini">[MapBounds.MapName]
+OriginX=0
+OriginY=0
+SizeX=409600
+SizeY=409600
+CenterX=204800
+CenterY=204800
+ExtentX=204800
+ExtentY=204800
+MapOverflowUU=0
+MinimapResolutionX=1024
+MinimapResolutionY=1024
+HashGridCellSizeX=300
+HashGridCellSizeY=300
+HashGridResolutionX=1366
+HashGridResolutionY=1366
+
+[MapBounds.Default]
+OriginX=0
+OriginY=0
+SizeX=409600
+SizeY=409600</code></pre>
+        <div class="ordered-grid">
+          <div><span>1</span><strong><code>MapBounds.&lt;当前关卡名&gt;</code></strong></div>
+          <div><span>2</span><strong><code>MapBounds.Default</code></strong></div>
+          <div><span>3</span><strong>关卡内 <code>AMinimapRangeConfig</code></strong></div>
+          <div><span>4</span><strong>Subsystem 当前已有 bounds</strong></div>
+          <div><span>5</span><strong>MassBattle HashGrid 推导 fallback</strong></div>
+        </div>
+      </section>
+
+      <section id="performance" class="doc-section" data-search="performance 性能 csv saved logs fogofwar scene perf minimap hashgrid draw">
+        <div class="section-heading">
+          <p class="eyebrow">Performance</p>
+          <h2>性能统计输出</h2>
+        </div>
+        <div class="metric-grid">
+          <div>
+            <span>场景迷雾</span>
+            <strong><code>Saved/Logs/FogOfWar_ScenePerf.csv</code></strong>
+            <p>记录场景 GPU 视野源收集、上传和总耗时。</p>
+          </div>
+          <div>
+            <span>小地图</span>
+            <strong><code>Saved/Logs/FogOfWar_MinimapPerf.csv</code></strong>
+            <p>记录 HashGrid 遍历、数据纹理上传和 RenderTarget 绘制耗时。</p>
+          </div>
+          <div>
+            <span>关键上限</span>
+            <strong><code>MaxSceneGpuVisionSources</code></strong>
+            <p>控制材质逐像素循环上限。过高会增加 GPU 后处理成本。</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="troubleshooting" class="doc-section" data-search="troubleshooting 排错 不更新 迷雾 材质 sight radius activate count">
+        <div class="section-heading">
+          <p class="eyebrow">Troubleshooting</p>
+          <h2>常见问题检查顺序</h2>
+        </div>
+        <div class="faq-list">
+          <details open>
+            <summary>有后处理材质，但迷雾不更新</summary>
+            <ul>
+              <li>确认关卡里存在 <code>AFogOfWar</code> 或 <code>BP_FogOfWar</code>，且已经 <code>Activate()</code>。</li>
+              <li>确认视野单位带 <code>UMassVisionTrait</code>，并且 <code>SightRadius &gt; 0</code>。</li>
+              <li>确认 <code>PostProcessingMaterial</code> 使用当前 <code>M_FogOfWar</code> 或参数契约完全一致的自定义材质。</li>
+            </ul>
+          </details>
+          <details>
+            <summary>部分单位没有揭雾</summary>
+            <ul>
+              <li>检查单位是否已经进入 MassBattle HashGrid。</li>
+              <li>检查 <code>FOW_SceneGpuVisionSourceCount</code> 是否达到 <code>MaxSceneGpuVisionSources</code> 上限。</li>
+              <li>必要时提高 <code>SceneGpuVisionSourceRadiusPadding</code>，避免 cell 或采样边缘误差造成漏收。</li>
+            </ul>
+          </details>
+          <details>
+            <summary>小地图没有显示单位</summary>
+            <ul>
+              <li>确认 Widget 中的 Image 名称是 <code>MinimapImage</code>。</li>
+              <li>确认 <code>MinimapMaterial</code> 已设置，且单位保留 <code>bShouldBeRepresentedOnMinimap=true</code>。</li>
+              <li>确认地图边界已由 <code>AMinimapRangeConfig</code>、INI 或 HashGrid 自动推导成功。</li>
+            </ul>
+          </details>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <span>Winyunq FogOfWar Documentation</span>
+    <a href="https://github.com/winyunq/FogOfWar">github.com/winyunq/FogOfWar</a>
+  </footer>
+</body>
+</html>
