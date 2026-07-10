@@ -348,7 +348,7 @@ public:
 	FMinimapDrawPerfStats LastDrawPerfStats;
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
-	FLinearColor DefaultTeamColor = FLinearColor::White;
+	FLinearColor DefaultTeamColor = FLinearColor(0.7f, 0.7f, 0.7f, 1.0f);
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category="Minimap|Team")
 	TArray<FLinearColor> TeamColors = {

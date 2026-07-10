@@ -48,7 +48,7 @@ namespace
 			return true;
 		}
 
-		static const FLinearColor DefaultTeamColor(0.45f, 0.45f, 0.45f, 1.0f);
+		static const FLinearColor DefaultTeamColor(0.7f, 0.7f, 0.7f, 1.0f);
 		static const FLinearColor DefaultTeamColors[] = {
 			FLinearColor(0.45f, 0.45f, 0.45f, 1.0f),
 			FLinearColor(0.10f, 0.72f, 0.18f, 1.0f),

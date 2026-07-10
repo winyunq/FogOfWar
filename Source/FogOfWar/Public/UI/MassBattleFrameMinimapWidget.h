@@ -119,7 +119,7 @@ protected:
 
 	/** Used for every Team ID that has no explicit TeamColorN entry in MinimapColors.ini. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
-	FLinearColor DefaultTeamColor = FLinearColor(0.45f, 0.45f, 0.45f, 1.0f);
+	FLinearColor DefaultTeamColor = FLinearColor(0.7f, 0.7f, 0.7f, 1.0f);
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "MassBattleFrame Minimap|Performance")
 	FMassBattleFrameMinimapPerfStats LastPerfStats;

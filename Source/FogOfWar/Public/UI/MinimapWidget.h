@@ -86,7 +86,7 @@ protected:
 	FLinearColor MinimapRevealedColor = FLinearColor(0.08f, 0.11f, 0.12f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
-	FLinearColor DefaultTeamColor = FLinearColor(0.45f, 0.45f, 0.45f, 1.0f);
+	FLinearColor DefaultTeamColor = FLinearColor(0.7f, 0.7f, 0.7f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
 	TArray<FLinearColor> RecommendedTeamColors = {

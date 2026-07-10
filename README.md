@@ -356,7 +356,7 @@ HashGridResolutionY=1366
 ```ini
 [MinimapUnitColors]
 Version=1
-DefaultTeamColor=(R=0.360000,G=0.380000,B=0.420000,A=1.000000)
+DefaultTeamColor=(R=0.700000,G=0.700000,B=0.700000,A=1.000000)
 TeamColorCount=8
 TeamColor0=(R=0.360000,G=0.380000,B=0.420000,A=1.000000)
 TeamColor1=(R=0.050000,G=0.820000,B=0.340000,A=1.000000)
