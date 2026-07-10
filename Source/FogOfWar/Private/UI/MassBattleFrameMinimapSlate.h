@@ -16,9 +16,9 @@ struct FMassBattleMinimapUploadData
 	FVector2f MapMin = FVector2f::ZeroVector;
 	FVector2f MapSize = FVector2f(1.0f, 1.0f);
 	int32 LogicalResolution = 256;
-	float VisionRadiusUU = 1000.0f;
+	float VisionRadiusUU = 4000.0f;
 	float UnitRadiusUU = 100.0f;
-	float FogOpacity = 0.15f;
+	float FogOpacity = 0.5f;
 	uint32 ViewingTeamIndex = 0;
 };
 
@@ -48,9 +48,9 @@ private:
 	FVector2f MapMin_RenderThread = FVector2f::ZeroVector;
 	FVector2f MapSize_RenderThread = FVector2f(1.0f, 1.0f);
 	uint32 LogicalResolution_RenderThread = 256;
-	float VisionRadiusUU_RenderThread = 1000.0f;
+	float VisionRadiusUU_RenderThread = 4000.0f;
 	float UnitRadiusUU_RenderThread = 100.0f;
-	float FogOpacity_RenderThread = 0.15f;
+	float FogOpacity_RenderThread = 0.5f;
 	uint32 ViewingTeamIndex_RenderThread = 0;
 	uint32 AgentCount_RenderThread = 0;
 	uint32 TeamColorCount_RenderThread = 0;

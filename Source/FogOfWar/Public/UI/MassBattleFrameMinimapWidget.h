@@ -99,13 +99,13 @@ protected:
 	int32 MinimapResolution = 256;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Fog", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm", DisplayName = "Vision Radius"))
-	float VisionRadiusUU = 1000.0f;
+	float VisionRadiusUU = 4000.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Units", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm", DisplayName = "Unit Radius"))
 	float UnitRadiusUU = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Fog", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0", DisplayName = "Fog Opacity"))
-	float FogDarkenOpacity = 0.15f;
+	float FogDarkenOpacity = 0.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MassBattleFrame Minimap|Performance", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "Hz", DisplayName = "Update Rate"))
 	float UpdateRateHz = 1.0f / 3.0f;
