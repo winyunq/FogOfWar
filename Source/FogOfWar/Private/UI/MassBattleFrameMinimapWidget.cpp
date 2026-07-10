@@ -139,6 +139,7 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 	}
 
 	FMassBattleMinimapUploadData UploadData;
+	int32 AppendedBatchCount = 0;
 
 	// Batch-level bulk concatenation only. TArray::Append copies each contiguous block;
 	// there is no per-agent loop, projection, filtering, or repacking on the CPU.
@@ -156,6 +157,7 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 			UploadData.Locations.Append(Batch.LocationArray);
 			UploadData.DynamicParams0.Append(Batch.DynamicParams0_Array);
 			UploadData.IsHidden.Append(Batch.IsHiddenArray);
+			++AppendedBatchCount;
 		}
 	}
 
@@ -172,20 +174,24 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 	const int32 UploadedAgentCount = FMath::Min(
 		UploadData.Locations.Num(),
 		FMath::Min(UploadData.DynamicParams0.Num(), UploadData.IsHidden.Num()));
+	const uint64 UploadBytes =
+		static_cast<uint64>(UploadData.Locations.Num()) * sizeof(FVector)
+		+ static_cast<uint64>(UploadData.DynamicParams0.Num()) * sizeof(FVector4f)
+		+ static_cast<uint64>(UploadData.IsHidden.Num()) * sizeof(bool)
+		+ static_cast<uint64>(UploadData.TeamColors.Num()) * sizeof(FLinearColor);
 
 	// Ownership of the already-merged contiguous blocks moves to the render command.
 	// The render thread performs one raw upload per array; it never asks the CPU to project agents.
 	RenderData->Upload_GameThread(MoveTemp(UploadData));
-	static bool bLoggedFirstUpload = false;
-	if (!bLoggedFirstUpload)
-	{
-		bLoggedFirstUpload = true;
-		UE_LOG(LogTemp, Display, TEXT("MassBattleMinimap: first batch upload scheduled; Agents=%d MapMin=(%.1f,%.1f) MapSize=(%.1f,%.1f)"),
-			UploadedAgentCount, MapMin.X, MapMin.Y, MapWorldSize.X, MapWorldSize.Y);
-	}
 
 	LastPerfStats.CpuAgentTraversalCount = 0;
 	LastPerfStats.ParameterPushMs = static_cast<float>((FPlatformTime::Seconds() - StartSeconds) * 1000.0);
+	UE_LOG(LogTemp, Display,
+		TEXT("MassBattleMinimapPerf GT: Agents=%d Batches=%d BulkMergeAndSchedule=%.3fms UploadBytes=%llu"),
+		UploadedAgentCount,
+		AppendedBatchCount,
+		LastPerfStats.ParameterPushMs,
+		static_cast<unsigned long long>(UploadBytes));
 	return true;
 }
 

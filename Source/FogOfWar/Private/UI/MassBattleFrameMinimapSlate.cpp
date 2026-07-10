@@ -4,6 +4,7 @@
 
 #include "CommonRenderResources.h"
 #include "GlobalShader.h"
+#include "HAL/PlatformTime.h"
 #include "PipelineStateCache.h"
 #include "RHIStaticStates.h"
 #include "RenderGraphBuilder.h"
@@ -285,6 +286,7 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	const FMassBattleMinimapUploadData& UploadData)
 {
 	check(IsInRenderingThread());
+	const double UploadStartSeconds = FPlatformTime::Seconds();
 	static_assert(sizeof(FVector) == sizeof(uint32) * 6, "The minimap shader expects UE5 double FVector storage.");
 	static_assert(sizeof(FVector4f) == sizeof(float) * 4, "Unexpected FVector4f storage.");
 	static_assert(sizeof(FLinearColor) == sizeof(float) * 4, "Unexpected FLinearColor storage.");
@@ -339,6 +341,12 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	UnitRadiusUU_RenderThread = FMath::Max(UploadData.UnitRadiusUU, 0.0f);
 	FogOpacity_RenderThread = FMath::Clamp(UploadData.FogOpacity, 0.0f, 1.0f);
 	ViewingTeamIndex_RenderThread = UploadData.ViewingTeamIndex;
+
+	const double UploadMs = (FPlatformTime::Seconds() - UploadStartSeconds) * 1000.0;
+	UE_LOG(LogTemp, Display,
+		TEXT("MassBattleMinimapPerf RT: Agents=%u BufferCreateAndUpload=%.3fms"),
+		AgentCount_RenderThread,
+		UploadMs);
 }
 
 void FMassBattleMinimapRenderData::Release_RenderThread()

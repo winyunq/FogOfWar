@@ -76,24 +76,22 @@ float2 WorldToWidgetPixel(float2 WorldXY)
 	return RectMin + RotatedUV * RectSize;
 }
 
-float2 RoundedDiameterPixels(float RadiusUU)
+float2 RoundedParticleDiameterPixels(float RadiusUU)
 {
 	const float Resolution = max(float(LogicalResolution), 1.0);
-	const float2 WorldCellSize = MapSize / Resolution;
-	const float2 DiameterInCells = max(
-		ceil((2.0 * RadiusUU) / WorldCellSize),
+	const float2 WorldToLogicalScale = Resolution / MapSize;
+	const float2 WorldDrawSize = float2(2.0 * RadiusUU, 2.0 * RadiusUU);
+	const float2 LogicalDrawSize = max(
+		ceil(WorldDrawSize * WorldToLogicalScale),
 		float2(1.0, 1.0));
 
-	// One logical pixel is always exactly 1 / LogicalResolution of the displayed map.
-	// Rotation swaps the world axes. Taking the larger projected diameter guarantees
-	// square unit quads and genuinely circular vision masks even if the widget stretches.
-	const float2 LogicalPixelSize = RectSize / Resolution;
-	const float2 RotatedDiameterPixels = float2(
-		DiameterInCells.y * LogicalPixelSize.x,
-		DiameterInCells.x * LogicalPixelSize.y);
+	const float2 WidgetPixelsPerLogicalPixel = RectSize / Resolution;
+	const float2 RotatedDrawSizePixels = float2(
+		LogicalDrawSize.y * WidgetPixelsPerLogicalPixel.x,
+		LogicalDrawSize.x * WidgetPixelsPerLogicalPixel.y);
 	const float SquareDiameter = max(
-		max(RotatedDiameterPixels.x, RotatedDiameterPixels.y),
-		max(LogicalPixelSize.x, LogicalPixelSize.y));
+		max(RotatedDrawSizePixels.x, RotatedDrawSizePixels.y),
+		max(WidgetPixelsPerLogicalPixel.x, WidgetPixelsPerLogicalPixel.y));
 	return float2(SquareDiameter, SquareDiameter);
 }
 
@@ -103,7 +101,7 @@ FUnitVSToPS UnitVS(uint VertexID : SV_VertexID, uint InstanceID : SV_InstanceID)
 	const uint TeamID = asuint(DynamicParams0[InstanceID].w) & 1023u;
 	const bool bValid = IsHidden[InstanceID] == 0u && TeamID < TeamColorCount;
 	const float2 CenterPixel = WorldToWidgetPixel(LoadWorldXY(InstanceID));
-	const float2 DiameterPixels = RoundedDiameterPixels(UnitRadiusUU);
+	const float2 DiameterPixels = RoundedParticleDiameterPixels(UnitRadiusUU);
 	const float2 PixelPosition = CenterPixel + (QuadCorners[VertexID] - 0.5) * DiameterPixels;
 	Output.Position = bValid ? PixelToClip(PixelPosition) : float4(-2.0, -2.0, 0.0, 1.0);
 	Output.Color = bValid ? TeamColors[TeamID] : 0.0.xxxx;
@@ -123,7 +121,7 @@ FVisionVSToPS VisionVS(uint VertexID : SV_VertexID, uint InstanceID : SV_Instanc
 	// relationships require an explicit future input and are not guessed here.
 	const bool bValid = IsHidden[InstanceID] == 0u && TeamID == ViewingTeamIndex;
 	const float2 CenterPixel = WorldToWidgetPixel(LoadWorldXY(InstanceID));
-	const float2 DiameterPixels = RoundedDiameterPixels(VisionRadiusUU);
+	const float2 DiameterPixels = RoundedParticleDiameterPixels(VisionRadiusUU);
 	const float2 PixelPosition = CenterPixel + (QuadCorners[VertexID] - 0.5) * DiameterPixels;
 	Output.Position = bValid ? PixelToClip(PixelPosition) : float4(-2.0, -2.0, 0.0, 1.0);
 	Output.CircleUV = QuadCorners[VertexID] * 2.0 - 1.0;
