@@ -3,15 +3,11 @@
 #include "FogOfWar.h"
 
 #include "FogOfWarMassBinding.h"
-#include "Components/BrushComponent.h"
 #include "Components/PostProcessComponent.h"
 #include "Engine/Texture2D.h"
 #include "MassEntitySubsystem.h"
 #include "Subsystems/MassBattleHashGridSubsystem.h"
 #include "Subsystems/MinimapDataSubsystem.h"
-#include "Utils/ManagerComponent.h"
-#include "Utils/ManagerStatics.h"
-#include "Utils/Macros.h"
 #include "HAL/PlatformTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -24,13 +20,13 @@ namespace Names
 {
 	const TCHAR* ScenePerformanceCsvRelativePath = TEXT("Logs/FogOfWar_ScenePerf.csv");
 
-	DECLARE_STATIC_FNAME(FOW_NotVisibleRegionBrightness);
-	DECLARE_STATIC_FNAME(FOW_BottomLeftWorldLocation);
-	DECLARE_STATIC_FNAME(FOW_GridSize);
-	DECLARE_STATIC_FNAME(FOW_GridWorldSize);
-	DECLARE_STATIC_FNAME(FOW_SceneGpuVisionSourceTexture);
-	DECLARE_STATIC_FNAME(FOW_SceneGpuVisionSourceCount);
-	DECLARE_STATIC_FNAME(FOW_EnableSceneGpuVisionSources);
+	const FName FOW_NotVisibleRegionBrightness("FOW_NotVisibleRegionBrightness");
+	const FName FOW_BottomLeftWorldLocation("FOW_BottomLeftWorldLocation");
+	const FName FOW_GridSize("FOW_GridSize");
+	const FName FOW_GridWorldSize("FOW_GridWorldSize");
+	const FName FOW_SceneGpuVisionSourceTexture("FOW_SceneGpuVisionSourceTexture");
+	const FName FOW_SceneGpuVisionSourceCount("FOW_SceneGpuVisionSourceCount");
+	const FName FOW_EnableSceneGpuVisionSources("FOW_EnableSceneGpuVisionSources");
 
 	UTexture2D* CreateSceneGpuVisionDataTexture(UObject* Outer, int32 Width)
 	{
@@ -110,8 +106,6 @@ void AFogOfWar::Activate()
 
 	PostProcess->AddOrUpdateBlendable(PostProcessingMID);
 
-	auto GameManager = UManagerStatics::GetGameManager(this);
-	GameManager->Register<ThisClass>(this);
 	PrimaryActorTick.SetTickFunctionEnable(true);
 }
 
@@ -124,66 +118,6 @@ void AFogOfWar::BeginPlay()
 		Activate();
 	}
 }
-
-#if WITH_EDITOR
-void AFogOfWar::RefreshVolumeInEditor()
-{
-	if (GetWorld() && !GetWorld()->IsGameWorld())
-	{
-		Initialize();
-	}
-}
-#endif
-
-#if WITH_EDITOR
-bool AFogOfWar::CanEditChange(const FProperty* InProperty) const
-{
-	if (!Super::CanEditChange(InProperty))
-	{
-		return false;
-	}
-
-	const FName PropertyName = InProperty->GetFName();
-
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume) ||
-		PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, PostProcessingMaterial))
-	{
-		return !GetWorld() || !GetWorld()->IsGameWorld();
-	}
-
-	return true;
-}
-#endif
-
-#if WITH_EDITOR
-void AFogOfWar::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
-{
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	const FName PropertyName = PropertyChangedEvent.Property->GetFName();
-
-	if (GetWorld() && GetWorld()->IsGameWorld())
-	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, NotVisibleRegionBrightness))
-		{
-			if (IsValid(PostProcessingMID))
-			{
-				PostProcessingMID->SetScalarParameterValue(Names::FOW_NotVisibleRegionBrightness, NotVisibleRegionBrightness);
-			}
-			return;
-		}
-	}
-
-	if (GetWorld() && !GetWorld()->IsGameWorld())
-	{
-		if (PropertyName == GET_MEMBER_NAME_CHECKED(AFogOfWar, GridVolume))
-		{
-			RefreshVolumeInEditor();
-			return;
-		}
-	}
-}
-#endif
 
 void AFogOfWar::Tick(float DeltaSeconds)
 {
@@ -198,37 +132,16 @@ void AFogOfWar::Initialize()
 {
 	GridSize = FVector2D::ZeroVector;
 	GridBottomLeftWorldLocation = FVector2D::ZeroVector;
+	const FVector Origin = GetActorLocation();
+	GridSize = FVector2D(FMath::Max(1.0f, WorldGridSize.X), FMath::Max(1.0f, WorldGridSize.Y));
+	GridBottomLeftWorldLocation = FVector2D(
+		Origin.X - GridSize.X * 0.5f,
+		Origin.Y - GridSize.Y * 0.5f);
+	UE_LOG(LogFogOfWar, Log, TEXT("Using actor-centered grid for world bounds. Origin=%s Size=%s"),
+		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString());
 
-	if (IsValid(GridVolume))
-	{
-		UBrushComponent* VolumeBrush = GridVolume->GetBrushComponent();
-		if (VolumeBrush)
-		{
-			const FBoxSphereBounds Bounds = VolumeBrush->CalcBounds(VolumeBrush->GetComponentTransform());
-			GridSize = {
-				Bounds.BoxExtent.X * 2,
-				Bounds.BoxExtent.Y * 2
-			};
-			GridBottomLeftWorldLocation = {
-				Bounds.Origin.X - GridSize.X / 2,
-				Bounds.Origin.Y - GridSize.Y / 2
-			};
-		}
-	}
-
-	if (GridSize.X <= 0.0f || GridSize.Y <= 0.0f)
-	{
-		GridSize = FVector2D(FMath::Max(1.0f, FallbackGridSize.X), FMath::Max(1.0f, FallbackGridSize.Y));
-		const FVector Origin = GetActorLocation();
-		GridBottomLeftWorldLocation = FVector2D(Origin.X - GridSize.X * 0.5f, Origin.Y - GridSize.Y * 0.5f);
-		UE_LOG(LogFogOfWar, Log, TEXT("GridVolume is not set. Using fallback bounds centered on actor. Origin=%s Size=%s"),
-			*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString());
-	}
-
-	if (UMinimapDataSubsystem* MinimapSubsystem = UMinimapDataSubsystem::Get())
-	{
-		MinimapSubsystem->SyncWorldBounds(GridBottomLeftWorldLocation, GridSize);
-	}
+	// Keep AFogOfWar scene fog decoupled from minimap sizing.
+	// Minimap now computes its own scale (or uses HashGrid bounds), not FogOfWar's world bounds.
 }
 
 void AFogOfWar::UpdateSceneGpuVisionSourceTexture()

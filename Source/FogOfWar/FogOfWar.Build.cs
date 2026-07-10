@@ -36,7 +36,8 @@ public class FogOfWar : ModuleRules
 				"MassMovement",
 				"MassRepresentation",
 				"MassSignals",
-				"MassSpawner"
+				"MassSpawner",
+				"Niagara"
 			}
 			);
 			
@@ -46,11 +47,13 @@ public class FogOfWar : ModuleRules
 			{
 				"CoreUObject",
 				"Engine",
+				"Projects",
+				"RenderCore",
+				"RHI",
 				"Slate",
 				"SlateCore",
 				"MassCommon",
-				"RHI",
-				"RenderCore",
+				"RTSInputSystem",
 				"UMG", // Needed for UUserWidget
 				"InputCore", // Needed for EKeys
 				// ... add private dependencies that you statically link with here ...	

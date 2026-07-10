@@ -7,18 +7,13 @@
 #include "MassEntityTypes.h"
 #include "Components/PostProcessComponent.h"
 #include "MassFogOfWarFragments.h"
-#include "MassRepresentationFragments.h" // For FMassVisibilityFragment
-#include "MassRepresentationProcessor.h" // For UMassVisibilityProcessor
-#include "MassLODFragments.h" // For LOD culling tags
 #include "Subsystems/MinimapDataSubsystem.h"
 #include "FogOfWar.generated.h"
 
 /// @file FogOfWar.h
 /// @brief 定义了战争迷雾系统的核心Actor AFogOfWar。
 
-class UBrushComponent;
 class UTexture2D;
-class AVolume;
 
 /// 声明一个全局的日志分类，用于本模块的日志输出
 DECLARE_LOG_CATEGORY_EXTERN(LogFogOfWar, Log, All)
@@ -73,14 +68,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	bool bAutoActivate = true;
 
-	/// @brief 可选：定义战争迷雾生效范围的体积（Volume）。
-	/// @details 未设置时使用 Actor 位置和 FallbackGridSize，保证直接拖入关卡也能运行。
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly)
-	TObjectPtr<AVolume> GridVolume = nullptr;
-
-	/// @brief 未设置 GridVolume 时使用的默认世界范围，以 Actor 位置为中心。
+	/// @brief 世界网格范围（以世界坐标中心点 + 尺寸定义）。
+	/// @details 当前无“边界盒”语义：这是坐标归一化参数，不做几何裁剪。
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "FogOfWar|Bounds", meta = (ClampMin = "1.0", UIMin = "1.0"))
-	FVector2D FallbackGridSize = FVector2D(409600.0f, 409600.0f);
+	FVector2D WorldGridSize = FVector2D(409600.0f, 409600.0f);
 
 	/// @brief 非可见区域的亮度。
 	/// @details 在后期处理材质中，用于控制完全被迷雾覆盖区域的最终显示亮度。
@@ -121,12 +112,6 @@ protected:
 	virtual void BeginPlay() override;
 
 #if WITH_EDITOR
-	/// @brief 在编辑器中手动刷新Volume范围，重新计算网格。
-	UFUNCTION(CallInEditor, Category = "FogOfWar", DisplayName = "RefreshVolume")
-	void RefreshVolumeInEditor();
-
-	virtual bool CanEditChange(const FProperty* InProperty) const override;
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
 	virtual void Tick(float DeltaSeconds) override;

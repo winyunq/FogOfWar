@@ -24,12 +24,6 @@ void UMinimapCellObserver::ConfigureQueries(const TSharedRef<FMassEntityManager>
 
 void UMinimapCellObserver::Execute(FMassEntityManager& EntityManager, FMassExecutionContext& Context)
 {
-	const UMinimapDataSubsystem* MinimapSubsystem = Context.GetSubsystem<UMinimapDataSubsystem>();
-	if (!MinimapSubsystem || !MinimapSubsystem->IsMinimapGridReady())
-	{
-		return;
-	}
-
 	EntityQuery.ForEachEntityChunk(Context, [this](FMassExecutionContext& Context)
 	{
 		const TConstArrayView<FOW_LOCATION_FRAGMENT> LocationList = Context.GetFragmentView<FOW_LOCATION_FRAGMENT>();

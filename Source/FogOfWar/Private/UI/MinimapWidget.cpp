@@ -15,7 +15,10 @@
 #include "MassEntitySubsystem.h"
 #include "MassCommonFragments.h"
 #include "MassFogOfWarFragments.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMinimapWidget, Log, All);
@@ -23,6 +26,10 @@ DEFINE_LOG_CATEGORY_STATIC(LogMinimapWidget, Log, All);
 namespace
 {
 	constexpr int32 FallbackMinimapTextureResolution = 256;
+	constexpr int32 MaxConfigTeamColors = 64;
+	const TCHAR* MinimapColorDirectoryName = TEXT("MapRegion");
+	const TCHAR* MinimapColorFileName = TEXT("MinimapColors.ini");
+	const TCHAR* MinimapColorSectionName = TEXT("MinimapUnitColors");
 
 	struct FMinimapCanvasDot
 	{
@@ -30,10 +37,215 @@ namespace
 		FLinearColor Color = FLinearColor::White;
 	};
 
+	struct FMinimapDisplayOptions
+	{
+		FLinearColor DefaultTeamColor = FLinearColor::White;
+		TArray<FLinearColor> TeamColors;
+		bool bNormalizeTeamColorDirection = true;
+		float NormalUnitColorLength = 0.5f;
+		float SelectedUnitColorLength = 1.0f;
+		FLinearColor CombatUnitColor = FLinearColor::White;
+		bool bEnableCombatColorFlash = false;
+		float CombatColorFlashHz = 3.0f;
+		float DefaultUnitPixelRadius = 1.5f;
+	};
+
 	FORCEINLINE bool IsValidTextureResolution(const FIntPoint& Resolution)
 	{
 		return Resolution.X > 0 && Resolution.Y > 0;
 	}
+
+	FString GetMinimapColorCleanMapName(const UWorld* World)
+	{
+		if (!World)
+		{
+			return TEXT("Default");
+		}
+
+		FString MapName = World->GetMapName();
+		MapName.RemoveFromStart(World->StreamingLevelsPrefix);
+		return MapName.IsEmpty() ? FString(TEXT("Default")) : MapName;
+	}
+
+	FString GetMinimapColorIniPath(const UWorld* World)
+	{
+		return FPaths::ProjectConfigDir() / MinimapColorDirectoryName / GetMinimapColorCleanMapName(World) / MinimapColorFileName;
+	}
+
+	void SetMinimapConfigColor(FConfigFile& IniFile, const FString& SectionName, const TCHAR* Key, const FLinearColor& Color)
+	{
+		IniFile.SetString(*SectionName, Key, *Color.ToString());
+	}
+
+	bool GetMinimapConfigColor(const FConfigFile& IniFile, const TCHAR* Key, FLinearColor& InOutColor)
+	{
+		FString Value;
+		if (!IniFile.GetString(MinimapColorSectionName, Key, Value))
+		{
+			return false;
+		}
+
+		FLinearColor ParsedColor;
+		if (!ParsedColor.InitFromString(Value))
+		{
+			UE_LOG(LogMinimapWidget, Warning, TEXT("[MinimapWidget] Invalid color value for %s in %s: %s"),
+				Key,
+				MinimapColorSectionName,
+				*Value);
+			return false;
+		}
+
+		InOutColor = ParsedColor;
+		return true;
+	}
+
+	FMinimapDisplayOptions MakeMinimapDisplayOptions(
+		const FLinearColor& InDefaultTeamColor,
+		const TArray<FLinearColor>& InTeamColors,
+		bool bInNormalizeTeamColorDirection,
+		float InNormalUnitColorLength,
+		float InSelectedUnitColorLength,
+		const FLinearColor& InCombatUnitColor,
+		bool bInEnableCombatColorFlash,
+		float InCombatColorFlashHz,
+		float InDefaultUnitPixelRadius)
+	{
+		FMinimapDisplayOptions Options;
+		Options.DefaultTeamColor = InDefaultTeamColor;
+		Options.TeamColors = InTeamColors;
+		Options.bNormalizeTeamColorDirection = bInNormalizeTeamColorDirection;
+		Options.NormalUnitColorLength = InNormalUnitColorLength;
+		Options.SelectedUnitColorLength = InSelectedUnitColorLength;
+		Options.CombatUnitColor = InCombatUnitColor;
+		Options.bEnableCombatColorFlash = bInEnableCombatColorFlash;
+		Options.CombatColorFlashHz = InCombatColorFlashHz;
+		Options.DefaultUnitPixelRadius = InDefaultUnitPixelRadius;
+		return Options;
+	}
+
+	bool SaveMinimapColorIni(const UWorld* World, const FMinimapDisplayOptions& Options, bool bOverwriteExisting)
+	{
+		const FString IniPath = GetMinimapColorIniPath(World);
+		if (!bOverwriteExisting && FPaths::FileExists(IniPath))
+		{
+			return true;
+		}
+
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(IniPath), true);
+
+		FConfigFile IniFile;
+		const FString SectionName = MinimapColorSectionName;
+		IniFile.SetString(*SectionName, TEXT("Version"), TEXT("1"));
+		SetMinimapConfigColor(IniFile, SectionName, TEXT("DefaultTeamColor"), Options.DefaultTeamColor);
+		IniFile.SetString(*SectionName, TEXT("TeamColorCount"), *FString::FromInt(Options.TeamColors.Num()));
+		for (int32 Index = 0; Index < Options.TeamColors.Num(); ++Index)
+		{
+			SetMinimapConfigColor(IniFile, SectionName, *FString::Printf(TEXT("TeamColor%d"), Index), Options.TeamColors[Index]);
+		}
+		IniFile.SetString(*SectionName, TEXT("bNormalizeTeamColorDirection"), Options.bNormalizeTeamColorDirection ? TEXT("True") : TEXT("False"));
+		IniFile.SetFloat(*SectionName, TEXT("NormalUnitColorLength"), Options.NormalUnitColorLength);
+		IniFile.SetFloat(*SectionName, TEXT("SelectedUnitColorLength"), Options.SelectedUnitColorLength);
+		SetMinimapConfigColor(IniFile, SectionName, TEXT("CombatUnitColor"), Options.CombatUnitColor);
+		IniFile.SetString(*SectionName, TEXT("bEnableCombatColorFlash"), Options.bEnableCombatColorFlash ? TEXT("True") : TEXT("False"));
+		IniFile.SetFloat(*SectionName, TEXT("CombatColorFlashHz"), Options.CombatColorFlashHz);
+		IniFile.SetFloat(*SectionName, TEXT("DefaultUnitPixelRadius"), Options.DefaultUnitPixelRadius);
+
+		const bool bSaved = IniFile.Write(IniPath);
+		UE_LOG(LogMinimapWidget, Log, TEXT("[MinimapWidget] Export %s to %s"),
+			bSaved ? TEXT("succeeded") : TEXT("failed"),
+			*IniPath);
+		return bSaved;
+	}
+
+	bool LoadMinimapColorIni(const UWorld* World, FMinimapDisplayOptions& InOutOptions)
+	{
+		const FString IniPath = GetMinimapColorIniPath(World);
+		if (!FPaths::FileExists(IniPath))
+		{
+			return false;
+		}
+
+		FConfigFile IniFile;
+		IniFile.Read(IniPath);
+
+		bool bLoadedAnyValue = false;
+		bLoadedAnyValue |= GetMinimapConfigColor(IniFile, TEXT("DefaultTeamColor"), InOutOptions.DefaultTeamColor);
+
+		int32 TeamColorCount = InOutOptions.TeamColors.Num();
+		if (!IniFile.GetInt(MinimapColorSectionName, TEXT("TeamColorCount"), TeamColorCount))
+		{
+			for (int32 Index = 0; Index < MaxConfigTeamColors; ++Index)
+			{
+				FString UnusedValue;
+				if (IniFile.GetString(MinimapColorSectionName, *FString::Printf(TEXT("TeamColor%d"), Index), UnusedValue))
+				{
+					TeamColorCount = FMath::Max(TeamColorCount, Index + 1);
+				}
+			}
+		}
+		TeamColorCount = FMath::Clamp(TeamColorCount, 0, MaxConfigTeamColors);
+
+		TArray<FLinearColor> LoadedTeamColors;
+		LoadedTeamColors.SetNum(TeamColorCount);
+		bool bLoadedAnyTeamColor = false;
+		for (int32 Index = 0; Index < TeamColorCount; ++Index)
+		{
+			FLinearColor TeamColor = InOutOptions.TeamColors.IsValidIndex(Index)
+				? InOutOptions.TeamColors[Index]
+				: InOutOptions.DefaultTeamColor;
+			if (GetMinimapConfigColor(IniFile, *FString::Printf(TEXT("TeamColor%d"), Index), TeamColor))
+			{
+				bLoadedAnyTeamColor = true;
+			}
+			LoadedTeamColors[Index] = TeamColor;
+		}
+		if (bLoadedAnyTeamColor)
+		{
+			InOutOptions.TeamColors = MoveTemp(LoadedTeamColors);
+			bLoadedAnyValue = true;
+		}
+
+		bool bBoolValue = false;
+		if (IniFile.GetBool(MinimapColorSectionName, TEXT("bNormalizeTeamColorDirection"), bBoolValue))
+		{
+			InOutOptions.bNormalizeTeamColorDirection = bBoolValue;
+			bLoadedAnyValue = true;
+		}
+		float FloatValue = 0.0f;
+		if (IniFile.GetFloat(MinimapColorSectionName, TEXT("NormalUnitColorLength"), FloatValue))
+		{
+			InOutOptions.NormalUnitColorLength = FloatValue;
+			bLoadedAnyValue = true;
+		}
+		if (IniFile.GetFloat(MinimapColorSectionName, TEXT("SelectedUnitColorLength"), FloatValue))
+		{
+			InOutOptions.SelectedUnitColorLength = FloatValue;
+			bLoadedAnyValue = true;
+		}
+		bLoadedAnyValue |= GetMinimapConfigColor(IniFile, TEXT("CombatUnitColor"), InOutOptions.CombatUnitColor);
+		if (IniFile.GetBool(MinimapColorSectionName, TEXT("bEnableCombatColorFlash"), bBoolValue))
+		{
+			InOutOptions.bEnableCombatColorFlash = bBoolValue;
+			bLoadedAnyValue = true;
+		}
+		if (IniFile.GetFloat(MinimapColorSectionName, TEXT("CombatColorFlashHz"), FloatValue))
+		{
+			InOutOptions.CombatColorFlashHz = FloatValue;
+			bLoadedAnyValue = true;
+		}
+		if (IniFile.GetFloat(MinimapColorSectionName, TEXT("DefaultUnitPixelRadius"), FloatValue))
+		{
+			InOutOptions.DefaultUnitPixelRadius = FloatValue;
+			bLoadedAnyValue = true;
+		}
+
+		if (bLoadedAnyValue)
+		{
+			UE_LOG(LogMinimapWidget, Log, TEXT("[MinimapWidget] Loaded minimap unit colors from %s"), *IniPath);
+		}
+		return bLoadedAnyValue;
+	}
+
 }
 
 // 辅助函数：创建一个支持CPU访问的动态数据纹理
@@ -58,11 +270,6 @@ FIntPoint UMinimapWidget::GetEffectiveTextureResolution() const
 	if (IsValidTextureResolution(TextureResolution))
 	{
 		return TextureResolution;
-	}
-
-	if (MinimapDataSubsystem && IsValidTextureResolution(MinimapDataSubsystem->MinimapGridResolution))
-	{
-		return MinimapDataSubsystem->MinimapGridResolution;
 	}
 
 	return FIntPoint(FallbackMinimapTextureResolution, FallbackMinimapTextureResolution);
@@ -112,7 +319,8 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	bIsSuccessfullyInitialized = false;
 
 	MinimapDataSubsystem->SetMinimapResolution(TextureResolution);
-	MinimapDataSubsystem->SyncMinimapDisplayOptions(
+
+	FMinimapDisplayOptions DisplayOptions = MakeMinimapDisplayOptions(
 		DefaultTeamColor,
 		RecommendedTeamColors,
 		bNormalizeTeamColorDirection,
@@ -122,6 +330,18 @@ bool UMinimapWidget::InitializeMinimapSystem()
 		bEnableCombatColorFlash,
 		CombatColorFlashHz,
 		DefaultUnitPixelRadius);
+	SaveMinimapColorIni(GetWorld(), DisplayOptions, false);
+	LoadMinimapColorIni(GetWorld(), DisplayOptions);
+	MinimapDataSubsystem->SyncMinimapDisplayOptions(
+		DisplayOptions.DefaultTeamColor,
+		DisplayOptions.TeamColors,
+		DisplayOptions.bNormalizeTeamColorDirection,
+		DisplayOptions.NormalUnitColorLength,
+		DisplayOptions.SelectedUnitColorLength,
+		DisplayOptions.CombatUnitColor,
+		DisplayOptions.bEnableCombatColorFlash,
+		DisplayOptions.CombatColorFlashHz,
+		DisplayOptions.DefaultUnitPixelRadius);
 
 	const FIntPoint EffectiveTextureResolution = GetEffectiveTextureResolution();
 	if (!EnsureMinimapRenderTarget(EffectiveTextureResolution))
@@ -165,6 +385,7 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("UnitLocationDataTexture"), IconDataTexture);
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("IconColorTexture"), IconColorTexture);
 	MinimapMaterialInstance->SetTextureParameterValue(TEXT("UnitColorDataTexture"), IconColorTexture);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("SourceTextureWidth"), FMath::Max(1, MaxUnits));
 
 	// Use Subsystem Data for Bounds
 	const int32 MaterialTexX = FMath::Max(1, EffectiveTextureResolution.X);
@@ -176,6 +397,9 @@ bool UMinimapWidget::InitializeMinimapSystem()
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("GridWorldSize"), FLinearColor(MinimapDataSubsystem->GridSize.X, MinimapDataSubsystem->GridSize.Y, 0));
 	MinimapMaterialInstance->SetVectorParameterValue(TEXT("UnitSize"), FLinearColor(MaterialUnitWorldSize.X, MaterialUnitWorldSize.Y, 0));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("FogColor"), FLinearColor::Black);
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("RevealedColor"), MinimapRevealedColor);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("FogOpacity"), FMath::Clamp(MinimapFogOpacity, 0.0f, 1.0f));
 
 	// Configure Mass Queries once.
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
@@ -235,6 +459,26 @@ void UMinimapWidget::NormalizeRecommendedTeamColors()
 	{
 		NormalizeColor(TeamColor);
 	}
+}
+
+void UMinimapWidget::ExportMinimapColorConfig()
+{
+	const FMinimapDisplayOptions DisplayOptions = MakeMinimapDisplayOptions(
+		DefaultTeamColor,
+		RecommendedTeamColors,
+		bNormalizeTeamColorDirection,
+		NormalUnitColorLength,
+		SelectedUnitColorLength,
+		CombatUnitColor,
+		bEnableCombatColorFlash,
+		CombatColorFlashHz,
+		DefaultUnitPixelRadius);
+	SaveMinimapColorIni(GetWorld(), DisplayOptions, true);
+}
+
+FString UMinimapWidget::GetMinimapColorConfigPath() const
+{
+	return GetMinimapColorIniPath(GetWorld());
 }
 
 void UMinimapWidget::NativeConstruct()
@@ -445,9 +689,11 @@ void UMinimapWidget::DrawInLessSize()
 
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), UnitCount);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("SourceTextureWidth"), FMath::Max(1, MaxUnits));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("RevealedColor"), MinimapRevealedColor);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("FogOpacity"), FMath::Clamp(MinimapFogOpacity, 0.0f, 1.0f));
 
-	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
-	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
+	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
 }
 
@@ -558,10 +804,12 @@ void UMinimapWidget::DrawInMassSize()
 
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfUnits"), MaterialUnitCount);
 	MinimapMaterialInstance->SetScalarParameterValue(TEXT("NumberOfVisionSources"), VisionSourceCount);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("SourceTextureWidth"), FMath::Max(1, MaxUnits));
+	MinimapMaterialInstance->SetVectorParameterValue(TEXT("RevealedColor"), MinimapRevealedColor);
+	MinimapMaterialInstance->SetScalarParameterValue(TEXT("FogOpacity"), FMath::Clamp(MinimapFogOpacity, 0.0f, 1.0f));
 
-	const FLinearColor OpaqueBackgroundColor = FLinearColor::Black;
 	const double DrawStartTime = FPlatformTime::Seconds();
-	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, OpaqueBackgroundColor);
+	UKismetRenderingLibrary::ClearRenderTarget2D(this, MinimapRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 	UKismetRenderingLibrary::DrawMaterialToRenderTarget(this, MinimapRenderTarget, MinimapMaterialInstance);
 	if (bDrawUnitsWithCanvasOverlay && CanvasDots.Num() > 0)
 	{

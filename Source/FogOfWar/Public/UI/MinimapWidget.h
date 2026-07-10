@@ -79,6 +79,12 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance", meta = (ClampMin = "1.0", UIMin = "1.0"))
 	float CanvasUnitDotSize = 2.0f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	float MinimapFogOpacity = 0.15f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Appearance")
+	FLinearColor MinimapRevealedColor = FLinearColor(0.08f, 0.11f, 0.12f, 1.0f);
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Minimap|Team")
 	FLinearColor DefaultTeamColor = FLinearColor(0.45f, 0.45f, 0.45f, 1.0f);
 
@@ -121,7 +127,13 @@ protected:
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Team")
 	void NormalizeRecommendedTeamColors();
 
-	/** 小地图纹理的分辨率；Zero 表示使用小地图网格解析出的分辨率。 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Team")
+	void ExportMinimapColorConfig();
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "Minimap|Team")
+	FString GetMinimapColorConfigPath() const;
+
+	/** 小地图纹理的分辨率；Zero 表示使用 256x256。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Minimap|Performance", meta = (DisplayName = "Texture Resolution (0 = Auto)"))
 	FIntPoint TextureResolution = FIntPoint::ZeroValue;
 

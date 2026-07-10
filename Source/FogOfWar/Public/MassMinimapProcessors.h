@@ -3,6 +3,7 @@
 #pragma once
 
 #include "MassProcessor.h"
+#include "MassObserverProcessor.h"
 #include "MassMinimapProcessors.generated.h"
 
 /**

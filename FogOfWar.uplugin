@@ -18,7 +18,7 @@
 		{
 			"Name": "FogOfWar",
 			"Type": "Runtime",
-			"LoadingPhase": "Default"
+			"LoadingPhase": "PostConfigInit"
 		}
 	],
 	"Plugins": [
@@ -32,6 +32,14 @@
 		},
 		{
 			"Name": "EnhancedInput",
+			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
+			"Name": "OpenRTSCamera",
 			"Enabled": true
 		}
 	]

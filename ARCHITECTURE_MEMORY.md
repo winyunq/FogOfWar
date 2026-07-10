@@ -45,6 +45,9 @@ This file records integration decisions and pitfalls that should survive across 
 - The minimap should be low-frequency and UI-driven or subsystem-driven. It does not need per-frame precision.
 - The minimap is a low-resolution presentation problem. A 256x256 minimap means 65536 presentation samples; calling them tiles/cells is an implementation detail, not the gameplay fog model.
 - The preferred data source is `UMassBattleHashGridSubsystem::AgentGrid`, not a duplicate FogOfWar unit list.
+- `UMassBattleFrameMinimapWidget` is the GPU/NDC comparison path. It remains separate from `UMinimapWidget` so the existing HashGrid/downsampled path stays available as the CPU baseline, but it preserves the common Blueprint entry points needed for widget replacement tests.
+- Current observed minimap perf logs are from the non-NDC `UMinimapWidget` CPU/HashGrid path unless an NDC channel appears in `Saved/Logs/FogOfWar_MinimapPerf.csv`. `MassBattleFrameMinimapNdcProducerAvg` is producer-only. `MassBattleFrameMinimapNdcRenderTargetAvg` includes the in-widget RenderTarget fallback draw path.
+- The Mass Battle Frame minimap experiment culls to the RTS camera ground quad before writing a Niagara Data Channel. It may query Mass fragments only for the units that survived camera culling; do not reintroduce a full Mass entity query in this widget.
 - `UMinimapWidget` is the place to expose user-facing minimap options such as texture resolution, update interval, max encoded units, and rendering material.
 - Team filtering is not mandatory for the first minimap implementation, but visibility ownership will eventually require a team/alliance resolver.
 - Grid size and origin should be centralized. The intended direction is configuration-driven linkage between MassBattle HashGrid, minimap bounds, and FogOfWar bounds.
@@ -67,11 +70,11 @@ This file records integration decisions and pitfalls that should survive across 
 - `AFogOfWar` does not activate `UMinimapDataSubsystem::VisionTiles` for scene fog. The CPU tile grid may remain as legacy data/API, but it must not be used for the main camera fog path.
 - Camera-visible scene fog is GPU-driven, using visible allied/friendly units as reveal sources inside the camera region.
 - Scene fog and minimap fog are separate rendering problems. Do not reuse minimap unit/color/tile data as the source for scene post-process fog.
-- `AFogOfWar` owns the scene post-process bridge. It can upload `FOW_SceneGpuVisionSourceTexture` with texels `(WorldX, WorldY, SightRadius, Reserved)`, plus `FOW_SceneGpuVisionSourceCount` and `FOW_EnableSceneGpuVisionSources`. The post-process material can use those sources to decide per scene pixel whether the pixel is covered by a reveal radius.
+- `AFogOfWar` owns the baseline scene post-process bridge. `AMassBattleFrameFogOfWar` is the MassBattle-prefixed independent Actor replacement for A/B tests. Both upload `FOW_SceneGpuVisionSourceTexture` with texels `(WorldX, WorldY, SightRadius, Reserved)`, plus `FOW_SceneGpuVisionSourceCount` and `FOW_EnableSceneGpuVisionSources`.
 - The final scene fog visibility test is circular. AABB/bounds are allowed only as CPU broad-phase query windows for HashGrid and camera-frustum candidate collection; they must not become the final reveal shape.
 - The scene material should evaluate each screen pixel/world position against the uploaded circle sources. Smooth edge/temporal fade belongs in the post-process material or a dedicated GPU history pass, not in minimap compression data.
 - The UMGMCP `hlsl_*` protocol is UI-material-only and must not be used for scene fog post-process assets. Use `material_setup_scene_fog_postprocess` for `/FogOfWar/Core/Materials/M_FogOfWarPostProcessing`, because it creates a PostProcess material and wires `PostProcessInput0`, `WorldPosition`, `FOW_*` parameters, and one Custom HLSL node to `EmissiveColor`.
-- Scene GPU vision source collection should prefer `URTSCamera::minimapFrustumPoints[4]` as the camera ground quadrilateral. HashGrid query bounds must be expanded by a configured max/source search padding so off-camera large vision sources that cover the camera are not missed.
+- Scene GPU vision source collection should prefer the current camera ground quadrilateral. `AMassBattleFrameFogOfWar` builds it by viewport deprojection and expands it by `CameraGroundQuadPadding`; a future RTS-camera integration may swap in `URTSCamera::minimapFrustumPoints[4]`.
 - Scene GPU source compression is per HashGrid agent cell. Merge all vision sources in a cell into one covering circle centered on the cell center with radius `max(distance(unit, cellCenter) + SightRadius)`. This reduces source count without under-revealing. Do not use the minimap tile cache for scene fog, and do not fall back to a full Mass entity query unless HashGrid is unavailable by design.
 - The CPU tile grid remains useful for minimap/explored state and gameplay queries, but it should not be mistaken for the final high-detail scene fog model.
 
@@ -84,5 +87,5 @@ This file records integration decisions and pitfalls that should survive across 
 ## Plugin Descriptor Pitfalls
 
 - If `FogOfWar.Build.cs` depends on modules from another plugin, `FogOfWar.uplugin` must also list that plugin in its `Plugins` array. Otherwise UBT can compile inside the project but the plugin is fragile when packaged, migrated, or enabled independently.
-- Current explicit plugin dependencies: `MassBattle`, `MassGameplay`, and `EnhancedInput`. `MassBattleMinimap` code needed by FogOfWar is integrated as `AMinimapRangeConfig`; `OpenRTSCamera` is accessed only through optional reflection.
+- Current explicit plugin dependencies: `MassBattle`, `MassGameplay`, and `EnhancedInput`. Map region ini export is owned by `AMapRegion`; `OpenRTSCamera` reads the same ini through its own code path.
 - Default command tags used by UI assets/subsystems must exist in `Config/DefaultGameplayTags.ini`. Runtime code that calls `RequestGameplayTag` before native registration can still trigger editor ensures.

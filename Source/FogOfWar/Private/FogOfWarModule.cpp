@@ -2,11 +2,21 @@
 
 #include "FogOfWarModule.h"
 
+#include "Interfaces/IPluginManager.h"
+#include "Misc/Paths.h"
+#include "ShaderCore.h"
+
 #define LOCTEXT_NAMESPACE "FFogOfWarModule"
 
 void FFogOfWarModule::StartupModule()
 {
-	// This code will execute after your module is loaded into memory; the exact timing is specified in the .uplugin file per-module
+	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("FogOfWar"));
+	if (Plugin.IsValid() && !AllShaderSourceDirectoryMappings().Contains(TEXT("/Plugin/FogOfWar")))
+	{
+		AddShaderSourceDirectoryMapping(
+			TEXT("/Plugin/FogOfWar"),
+			FPaths::Combine(Plugin->GetBaseDir(), TEXT("Shaders")));
+	}
 }
 
 void FFogOfWarModule::ShutdownModule()

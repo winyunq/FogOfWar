@@ -236,7 +236,7 @@ Content/Core/Materials/M_FogOfWarSuperSampling.uasset
 4. 在 Mass 实体原型上添加 `UMassVisionTrait`，给单位配置 `SightRadius`（大于 0）。
 
 > 当前主画面迷雾走 GPU 圆形视野源后处理路径。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 路径已经移除。
-> `GridVolume` 是可选的。未设置时，`AFogOfWar` 会以自身 Actor 位置为中心，使用 `FallbackGridSize` 作为世界范围，因此蓝图 Actor 可以直接拖入关卡运行。
+> `AFogOfWar` 和 `AMassBattleFrameFogOfWar` 都以自身 Actor 位置为中心，使用 `WorldGridSize` 作为世界范围，因此蓝图 Actor 可以直接拖入关卡运行。
 
 ### 5.2 小地图
 小地图走 `UMinimapDataSubsystem::UpdateMinimapFromHashGrid` 路径（HashGrid 降采样），`UMinimapWidget` 会在 Tick 中触发更新。
@@ -244,13 +244,58 @@ Content/Core/Materials/M_FogOfWarSuperSampling.uasset
 1. 确保 `UMinimapWidget` 设置了 `MinimapMaterial`，推荐使用 `Content/Core/Materials/MinimapTarget.uasset`。
 2. 通过 `TextureResolution` 配置小地图分辨率（默认 256x256）。
 3. 单位需带 `UMassVisionTrait` 且 `bShouldBeRepresentedOnMinimap=true`。
-4. 队伍色、普通/选中亮度和战斗白色由 `UMinimapWidget` 统一配置，运行时同步到 `UMinimapDataSubsystem` 后预计算为颜色查表。
+4. 队伍色、普通/选中亮度和战斗白色会从当前关卡的 `MinimapColors.ini` 读取；文件不存在时由 `UMinimapWidget`/`MapRegion` 用默认值导出。
+
+#### 5.2.1 Mass Battle Frame 小地图实验
+
+新增 `UMassBattleFrameMinimapWidget` 作为 MassBattle 前缀 GPU/NDC 对照控件。它不继承 `UMinimapWidget`，但保留 `InitializeMinimapSystem` 和 `ConvertMinimapUVToWorldLocation` 这两个蓝图入口，便于用控件替换做 A/B：
+
+```text
+相机地面四边形 -> HashGrid occupied cells -> 镜头内单位 -> Niagara Data Channel -> Niagara 小地图渲染
+```
+
+性能会写入同一个：
+
+```text
+Saved/Logs/FogOfWar_MinimapPerf.csv
+```
+
+新 channel 为：
+
+```text
+MassBattleFrameMinimapNdcProducerAvg
+MassBattleFrameMinimapNdcRenderTargetAvg
+```
+
+注意：`MassBattleFrameMinimapNdcProducerAvg` 只统计 CPU 侧 HashGrid 收集和 Niagara Data Channel 写入，不包含 Niagara/GPU 绘制、RenderTarget 或 UMG 呈现成本。`MassBattleFrameMinimapNdcRenderTargetAvg` 是当前完整 Widget fallback：写 NDC 后把同一批单位点绘制到小地图 RenderTarget 并显示到 `MinimapImage`，可用于端到端真实性能测试。
+
+场景战争迷雾新增 `AMassBattleFrameFogOfWar` 独立 Actor。它不继承 `AFogOfWar`，但保留同名核心属性/函数和相同后处理材质参数契约：
+
+```text
+FOW_SceneGpuVisionSourceTexture
+FOW_SceneGpuVisionSourceCount
+FOW_EnableSceneGpuVisionSources
+```
+
+对比时在关卡里替换 Actor 类即可。场景性能写入：
+
+```text
+Saved/Logs/FogOfWar_ScenePerf.csv
+```
+
+新 channel 为：
+
+```text
+MassBattleFrameSceneGpuVisionAvg
+```
+
+详细 NDC 变量契约和场景战争迷雾说明见 `Docs/MASS_BATTLE_FRAME_GPU_MINIMAP.md`。
 
 ### 5.3 常见故障排查
 
 如果出现“有后处理材质但迷雾不更新”，优先检查：
 
-1. 是否有 `AFogOfWar` 且已激活。
+1. 是否有 `AFogOfWar` 或 `AMassBattleFrameFogOfWar` 且已激活。
 2. 视野单位是否带 `UMassVisionTrait` 且 `SightRadius > 0`。
 3. `PostProcessingMaterial` 是否使用当前 `M_FogOfWar`，且材质参数名与插件中使用的参数一致（`FOW_*`）。
 4. `FOW_SceneGpuVisionSourceCount` 是否达到 `MaxSceneGpuVisionSources` 上限；达到上限时，超出的视野源不会上传。
@@ -265,24 +310,22 @@ GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本显式依
 
 还依赖 UE 的 Mass、UMG、Slate、RHI、RenderCore、EnhancedInput 等模块；具体以 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs` 为准。
 
-当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。`AFogOfWar` 场景主画面只需要配置 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
+当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。baseline 使用 `AFogOfWar`，MassBattle 对照路径使用 `AMassBattleFrameFogOfWar`。两者场景主画面只需要配置 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
 
 FogOfWar 核心模块不强制依赖 `OpenRTSCamera`。`URTSMinimapControllerWidget` 只广播小地图点击/拖动得到的世界坐标；如果项目使用 RTS 相机，请在项目侧或相机插件侧绑定 `OnWorldLocationRequested` 并执行相机跳转。
 
-`MassBattleMinimap` 的范围配置代码已并入 FogOfWar，运行时使用 `AMinimapRangeConfig`（显示名“小地图范围配置”）。未放置该配置，且没有显式设置小地图分辨率时，小地图会按 MassBattle HashGrid cell 自动推导边界和分辨率。
+关卡里的小地图区域配置负责导出 `MapRegion.ini`，小地图单位颜色配置使用同目录的 `MinimapColors.ini`。两者都按当前关卡名绑定。
 
-#### 5.4.1 Shared Map Bounds INI
+#### 5.4.1 Shared MapRegion INI
 
-FogOfWar 暂时拥有共享地图边界协议。`AMinimapRangeConfig` 可以把当前 Box 范围导出到：
+小地图区域配置把当前 Box 范围导出到：
 
 ```text
-<Project>/Config/FogOfWarMapBounds.ini
+<Project>/Config/MapRegion/<MapName>/MapRegion.ini
 ```
 
-该文件是项目级配置文件，但条目按关卡名分 section：
-
 ```ini
-[MapBounds.MapName]
+[MapRegion]
 OriginX=0
 OriginY=0
 SizeX=409600
@@ -298,25 +341,35 @@ HashGridCellSizeX=300
 HashGridCellSizeY=300
 HashGridResolutionX=1366
 HashGridResolutionY=1366
-
-[MapBounds.Default]
-OriginX=0
-OriginY=0
-SizeX=409600
-SizeY=409600
 ```
 
-运行时读取顺序：
+`OpenRTSCamera` 通过相同文件名和 section 名读取这个协议，不链接 `FogOfWar` C++ 模块。这是当前镜头边界和小地图单位坐标投影之间的桥。
 
-1. `MapBounds.<当前关卡名>`。
-2. `MapBounds.Default`。
-3. 关卡内放置的 `AMinimapRangeConfig`。
-4. 子系统当前已有 bounds。
-5. 从 MassBattle HashGrid 推导的 fallback。
+#### 5.4.2 Per-Level Minimap Color INI
 
-`OpenRTSCamera` 通过相同文件名和 section 名读取这个协议，不链接 `FogOfWar` C++ 模块。这是当前镜头边界和小地图边界之间的桥。
+小地图单位颜色导出到：
 
-作用域说明：当前实现不是把边界写进 `.umap`，而是在一个项目配置文件内维护每个关卡的 section。迁移关卡到其他项目时，需要同步迁移对应 INI section。若后续需要“真正伴随关卡资产”，应改为 WorldSettings 字段、关卡伴随 DataAsset，或在保存关卡时生成同名配置资产。
+```text
+<Project>/Config/MapRegion/<MapName>/MinimapColors.ini
+```
+
+```ini
+[MinimapUnitColors]
+Version=1
+DefaultTeamColor=(R=0.360000,G=0.380000,B=0.420000,A=1.000000)
+TeamColorCount=8
+TeamColor0=(R=0.360000,G=0.380000,B=0.420000,A=1.000000)
+TeamColor1=(R=0.050000,G=0.820000,B=0.340000,A=1.000000)
+bNormalizeTeamColorDirection=True
+NormalUnitColorLength=0.58
+SelectedUnitColorLength=1.00
+CombatUnitColor=(R=1.000000,G=1.000000,B=1.000000,A=1.000000)
+bEnableCombatColorFlash=True
+CombatColorFlashHz=3.50
+DefaultUnitPixelRadius=1.75
+```
+
+`TeamColorN` 对应 `FTeam.index == N`。`UMinimapWidget` 初始化时会先确保这个文件存在，再读取它覆盖蓝图默认配色；已存在的文件不会被自动覆盖。需要重新从 Widget 默认值导出时，可调用 `ExportMinimapColorConfig`。
 
 小地图最简使用方式：
 
@@ -402,7 +455,7 @@ FinalColor = lerp(FogColor, SceneColor, saturate(Visible));
 
 1. AABB / Bounds 只允许作为 CPU broad-phase 查询窗口，不能作为最终揭雾形状。
 2. 最终显示层只按圆揭雾。
-3. `SceneGpuVisionSourceSearchPadding` 必须不小于项目最大视野半径，否则镜头外的大视野源可能漏收。
+3. `CameraGroundQuadPadding` 必须不小于项目最大视野半径，否则镜头外的大视野源可能漏收。
 4. `MaxSceneGpuVisionSources` 控制材质循环上限；如果过大，GPU 像素循环会变重。
 5. 如果 GPU 循环成为瓶颈，优先减少上传圆源数量，而不是回到 CPU tile。
 

@@ -2,24 +2,26 @@
 
 #include "Subsystems/MinimapDataSubsystem.h"
 #include "FogOfWarMassBinding.h"
-#include "Minimap/MapBoundsConfig.h"
 #include "Subsystems/MassBattleHashGridSubsystem.h"
-#include "Minimap/MinimapRangeConfig.h"
 #include "MassEntitySubsystem.h"
 #include "MassFogOfWarFragments.h"
-#include "Kismet/GameplayStatics.h"
-#include "DrawDebugHelpers.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/PlatformTime.h"
+#include "Misc/ConfigCacheIni.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
+	constexpr float DefaultMapRegionSizeUU = 65536.0f;
 	constexpr int32 DefaultMinimapResolution = 256;
 	constexpr float DefaultVisionTileSize = 100.0f;
+	const TCHAR* MinimapDataMapRegionDirectoryName = TEXT("MapRegion");
+	const TCHAR* MinimapDataMapRegionFileName = TEXT("MapRegion.ini");
+	const TCHAR* MinimapDataMapRegionSectionName = TEXT("MapRegion");
 	const TCHAR* MinimapPerformanceCsvRelativePath = TEXT("Logs/FogOfWar_MinimapPerf.csv");
 
 	FORCEINLINE bool IsValidMinimapResolution(const FIntPoint& Resolution)
@@ -43,6 +45,50 @@ namespace
 		return static_cast<float>(FPlatformTime::ToMilliseconds64(Cycles));
 	}
 
+	FString GetMinimapDataCleanMapName(const UWorld* World)
+	{
+		if (!World)
+		{
+			return TEXT("Default");
+		}
+
+		FString MapName = World->GetMapName();
+		MapName.RemoveFromStart(World->StreamingLevelsPrefix);
+		return MapName.IsEmpty() ? FString(TEXT("Default")) : MapName;
+	}
+
+	FString GetMinimapDataMapRegionIniPath(const UWorld* World)
+	{
+		return FPaths::ProjectConfigDir() / MinimapDataMapRegionDirectoryName / GetMinimapDataCleanMapName(World) / MinimapDataMapRegionFileName;
+	}
+
+	void ReadMapRegionIni(
+		const UWorld* World,
+		FVector2D& OutGridOrigin,
+		FVector2D& OutGridSize)
+	{
+		OutGridOrigin = FVector2D(-DefaultMapRegionSizeUU * 0.5f, -DefaultMapRegionSizeUU * 0.5f);
+		OutGridSize = FVector2D(DefaultMapRegionSizeUU, DefaultMapRegionSizeUU);
+
+		FConfigFile IniFile;
+		IniFile.Read(GetMinimapDataMapRegionIniPath(World));
+
+		float OriginX = OutGridOrigin.X;
+		float OriginY = OutGridOrigin.Y;
+		float SizeX = OutGridSize.X;
+		float SizeY = OutGridSize.Y;
+		IniFile.GetFloat(MinimapDataMapRegionSectionName, TEXT("OriginX"), OriginX);
+		IniFile.GetFloat(MinimapDataMapRegionSectionName, TEXT("OriginY"), OriginY);
+		IniFile.GetFloat(MinimapDataMapRegionSectionName, TEXT("SizeX"), SizeX);
+		IniFile.GetFloat(MinimapDataMapRegionSectionName, TEXT("SizeY"), SizeY);
+
+		if (SizeX > 0.0f && SizeY > 0.0f)
+		{
+			OutGridOrigin = FVector2D(OriginX, OriginY);
+			OutGridSize = FVector2D(SizeX, SizeY);
+		}
+	}
+
 	bool IsEntitySelectedByOptionalRtsSubsystem(const ULocalPlayer* LocalPlayer, const FEntityHandle& EntityHandle)
 	{
 		if (!LocalPlayer)
@@ -50,7 +96,7 @@ namespace
 			return false;
 		}
 
-		UClass* SelectionSubsystemClass = FindObject<UClass>(nullptr, TEXT("/Script/OpenRTSCamera.RTSSelectionSubsystem"));
+		UClass* SelectionSubsystemClass = FindObject<UClass>(nullptr, TEXT("/Script/RTSInputSystem.RTSSelectionSubsystem"));
 		if (!SelectionSubsystemClass)
 		{
 			return false;
@@ -90,18 +136,9 @@ void UMinimapDataSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Super::Initialize(Collection);
 	SingletonInstance = this;
 	RebuildTeamDisplayColorCache();
-	bMinimapGridInitialized = ApplyMinimapGridFromConfigFile();
-	if (!bMinimapGridInitialized)
+	if (!ApplyMinimapGridFromMapRegion())
 	{
-		bMinimapGridInitialized = ApplyMinimapGridFromRangeConfig();
-	}
-	if (!bMinimapGridInitialized)
-	{
-		bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
-	}
-	if (!bMinimapGridInitialized)
-	{
-		TryAutoResolveMinimapGridFromHashGrid();
+		UE_LOG(LogTemp, Warning, TEXT("[MinimapDataSubsystem] Failed to initialize minimap bounds from current-level MapRegion ini."));
 	}
 }
 
@@ -120,8 +157,7 @@ void UMinimapDataSubsystem::SetMinimapResolution(const FIntPoint& NewResolution)
 	MinimapTileSize = FVector2D::ZeroVector;
 	MinimapTiles.Reset();
 
-	bMinimapGridInitialized = false;
-	EnsureMinimapGridReady();
+	ApplyMinimapGridFromMapRegion();
 }
 
 bool UMinimapDataSubsystem::ApplyMinimapGridFromCurrentBounds()
@@ -135,15 +171,7 @@ bool UMinimapDataSubsystem::ApplyMinimapGridFromCurrentBounds()
 
 	if (!IsValidMinimapResolution(MinimapGridResolution))
 	{
-		FIntPoint ResolvedResolution = FIntPoint::ZeroValue;
-		if (TryResolveMinimapResolutionFromHashGridCellSize(GridSize, ResolvedResolution))
-		{
-			MinimapGridResolution = ResolvedResolution;
-		}
-		else
-		{
-			ApplyFallbackMinimapResolution(MinimapGridResolution);
-		}
+		ApplyFallbackMinimapResolution(MinimapGridResolution);
 	}
 
 	MinimapTileSize = FVector2D(GridSize.X / MinimapGridResolution.X, GridSize.Y / MinimapGridResolution.Y);
@@ -151,107 +179,10 @@ bool UMinimapDataSubsystem::ApplyMinimapGridFromCurrentBounds()
 	return true;
 }
 
-bool UMinimapDataSubsystem::TryAutoResolveMinimapGridFromHashGrid()
+bool UMinimapDataSubsystem::ApplyMinimapGridFromMapRegion()
 {
-	if (bMinimapGridInitialized || !GetWorld())
-	{
-		return bMinimapGridInitialized;
-	}
-
-	const UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld());
-	if (!HashGrid || HashGrid->AgentGrid.Num() == 0)
-	{
-		return false;
-	}
-
-	const int32 BlockDimX = HashGrid->AgentBlockDimensionsCache.X;
-	const int32 BlockDimY = HashGrid->AgentBlockDimensionsCache.Y;
-	if (BlockDimX <= 0 || BlockDimY <= 0)
-	{
-		return false;
-	}
-
-	const float CellHalfSizeX = FMath::Abs(HashGrid->AgentCellSize.X) * 0.5f;
-	const float CellHalfSizeY = FMath::Abs(HashGrid->AgentCellSize.Y) * 0.5f;
-	if (CellHalfSizeX <= 0.0f || CellHalfSizeY <= 0.0f)
-	{
-		return false;
-	}
-
-	FVector2D AutoMin(FVector2D(FLT_MAX, FLT_MAX));
-	FVector2D AutoMax(FVector2D(-FLT_MAX, -FLT_MAX));
-	FIntPoint AutoMinCell(MAX_int32, MAX_int32);
-	FIntPoint AutoMaxCell(MIN_int32, MIN_int32);
-	bool bHasOccupiedCell = false;
-
-	for (const TPair<FIntVector, TSharedPtr<FAgentGridBlock>>& BlockPair : HashGrid->AgentGrid)
-	{
-		if (!BlockPair.Value.IsValid())
-		{
-			continue;
-		}
-
-		const FAgentGridBlock& Block = *BlockPair.Value;
-		for (TConstSetBitIterator<> CellIt(Block.OccupiedCells.OccupiedCellBitArray); CellIt; ++CellIt)
-		{
-			const int32 CellIndex = CellIt.GetIndex();
-			const int32 Z = CellIndex / (BlockDimX * BlockDimY);
-			const int32 RemAfterZ = CellIndex % (BlockDimX * BlockDimY);
-			const int32 Y = RemAfterZ / BlockDimX;
-			const int32 X = RemAfterZ % BlockDimX;
-
-			const FIntVector CellGlobalCoord = BlockPair.Key * HashGrid->AgentBlockDimensionsCache + FIntVector(X, Y, Z);
-			const FVector CellCenterWorld = HashGrid->AgentCoordToLocation(CellGlobalCoord);
-			const FVector2D CellMin(CellCenterWorld.X - CellHalfSizeX, CellCenterWorld.Y - CellHalfSizeY);
-			const FVector2D CellMax(CellCenterWorld.X + CellHalfSizeX, CellCenterWorld.Y + CellHalfSizeY);
-
-			AutoMin.X = FMath::Min(AutoMin.X, CellMin.X);
-			AutoMin.Y = FMath::Min(AutoMin.Y, CellMin.Y);
-			AutoMax.X = FMath::Max(AutoMax.X, CellMax.X);
-			AutoMax.Y = FMath::Max(AutoMax.Y, CellMax.Y);
-			AutoMinCell.X = FMath::Min(AutoMinCell.X, CellGlobalCoord.X);
-			AutoMinCell.Y = FMath::Min(AutoMinCell.Y, CellGlobalCoord.Y);
-			AutoMaxCell.X = FMath::Max(AutoMaxCell.X, CellGlobalCoord.X);
-			AutoMaxCell.Y = FMath::Max(AutoMaxCell.Y, CellGlobalCoord.Y);
-			bHasOccupiedCell = true;
-		}
-	}
-
-	if (!bHasOccupiedCell)
-	{
-		return false;
-	}
-
-	GridBottomLeftWorldLocation = AutoMin;
-	GridSize = AutoMax - AutoMin;
-	if (!bMinimapResolutionExplicitlySet)
-	{
-		MinimapGridResolution = FIntPoint(
-			FMath::Max(1, AutoMaxCell.X - AutoMinCell.X + 1),
-			FMath::Max(1, AutoMaxCell.Y - AutoMinCell.Y + 1));
-	}
-	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Auto-resolved minimap bounds from HashGrid: Origin=%s, Size=%s, Resolution=%s"),
-		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString(), *MinimapGridResolution.ToString());
-
-	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
-	return bMinimapGridInitialized;
-}
-
-bool UMinimapDataSubsystem::ApplyMinimapGridFromConfigFile()
-{
-	FFogOfWarMapBoundsConfig Config;
-	if (!FFogOfWarMapBoundsConfig::LoadForWorld(GetWorld(), Config))
-	{
-		return false;
-	}
-
-	GridBottomLeftWorldLocation = Config.GridOrigin;
-	GridSize = Config.GridSize;
-	bMinimapResolutionExplicitlySet = IsValidMinimapResolution(Config.MinimapGridResolution);
-	MinimapGridResolution = bMinimapResolutionExplicitlySet ? Config.MinimapGridResolution : FIntPoint::ZeroValue;
-
-	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Initialized minimap bounds from FogOfWarMapBounds.ini: Origin=%s Size=%s Resolution=%s"),
-		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString(), *MinimapGridResolution.ToString());
+	ReadMapRegionIni(GetWorld(), GridBottomLeftWorldLocation, GridSize);
+	MinimapGridResolution = bMinimapResolutionExplicitlySet ? MinimapGridResolution : FIntPoint::ZeroValue;
 
 	if (UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld()))
 	{
@@ -262,140 +193,12 @@ bool UMinimapDataSubsystem::ApplyMinimapGridFromConfigFile()
 		}
 	}
 
-	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
-	return bMinimapGridInitialized;
-}
-
-bool UMinimapDataSubsystem::ApplyMinimapGridFromRangeConfig()
-{
-	if (!GetWorld())
-	{
-		return false;
-	}
-
-	TArray<AActor*> FoundActors;
-	UGameplayStatics::GetAllActorsOfClass(GetWorld(), AMinimapRangeConfig::StaticClass(), FoundActors);
-	if (FoundActors.Num() == 0)
-	{
-		return false;
-	}
-
-	const AMinimapRangeConfig* SelectedConfig = nullptr;
-	float SelectedConfigArea = 0.0f;
-	const APawn* LocalPawn = GetWorld()->GetFirstPlayerController() ? GetWorld()->GetFirstPlayerController()->GetPawn() : nullptr;
-	const FVector LocalPawnLocation = LocalPawn ? LocalPawn->GetActorLocation() : FVector::ZeroVector;
-	const bool bHasLocalPawn = LocalPawn != nullptr;
-
-	for (AActor* CandidateActor : FoundActors)
-	{
-		const AMinimapRangeConfig* CandidateConfig = Cast<AMinimapRangeConfig>(CandidateActor);
-		if (!CandidateConfig || !CandidateConfig->BoundsComponent)
-		{
-			continue;
-		}
-
-		const FVector CandidateExtent = CandidateConfig->BoundsComponent->GetScaledBoxExtent();
-		if (CandidateExtent.X <= 0.0f || CandidateExtent.Y <= 0.0f)
-		{
-			continue;
-		}
-
-		float CandidateArea = CandidateExtent.X * CandidateExtent.Y;
-
-		const FTransform CandidateTransform = CandidateConfig->BoundsComponent->GetComponentTransform();
-		const FVector CandidateLocal = CandidateTransform.InverseTransformPosition(LocalPawnLocation);
-		if (bHasLocalPawn &&
-			FMath::Abs(CandidateLocal.X) <= CandidateExtent.X &&
-			FMath::Abs(CandidateLocal.Y) <= CandidateExtent.Y)
-		{
-			CandidateArea *= 1000.0f;
-		}
-
-		if (SelectedConfig == nullptr || CandidateArea > SelectedConfigArea)
-		{
-			SelectedConfig = CandidateConfig;
-			SelectedConfigArea = CandidateArea;
-		}
-	}
-
-	if (!SelectedConfig || !SelectedConfig->BoundsComponent)
-	{
-		return false;
-	}
-
-	const FVector RegionCenter = SelectedConfig->BoundsComponent->GetComponentLocation();
-	const FVector RegionExtent = SelectedConfig->BoundsComponent->GetScaledBoxExtent();
-	const FVector2D Origin2D(RegionCenter.X - RegionExtent.X, RegionCenter.Y - RegionExtent.Y);
-	const FVector2D Size2D(RegionExtent.X * 2.0f, RegionExtent.Y * 2.0f);
-	if (Size2D.X <= 0.0f || Size2D.Y <= 0.0f)
-	{
-		return false;
-	}
-
-	GridBottomLeftWorldLocation = Origin2D;
-	GridSize = Size2D;
-	if (!bMinimapResolutionExplicitlySet && SelectedConfig->HasExplicitGridResolution())
-	{
-		MinimapGridResolution = SelectedConfig->GridResolution;
-	}
-	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Initialized minimap bounds from AMinimapRangeConfig: Origin=%s Size=%s Resolution=%s"),
+	const bool bApplied = ApplyMinimapGridFromCurrentBounds();
+	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Initialized minimap bounds from MapRegion ini: Origin=%s Size=%s Resolution=%s"),
 		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString(), *MinimapGridResolution.ToString());
-	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
-
-	if (UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld()))
-	{
-		if (HashGrid->AgentGrid.Num() == 0)
-		{
-			HashGrid->GridOrigin.X = GridBottomLeftWorldLocation.X;
-			HashGrid->GridOrigin.Y = GridBottomLeftWorldLocation.Y;
-		}
-	}
-
-	return bMinimapGridInitialized;
+	return bApplied;
 }
 
-bool UMinimapDataSubsystem::TryResolveMinimapResolutionFromHashGridCellSize(const FVector2D& BoundsSize, FIntPoint& OutResolution) const
-{
-	const UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld());
-	if (!HashGrid)
-	{
-		return false;
-	}
-
-	const float CellSizeX = FMath::Abs(HashGrid->AgentCellSize.X);
-	const float CellSizeY = FMath::Abs(HashGrid->AgentCellSize.Y);
-	if (BoundsSize.X <= 0.0f || BoundsSize.Y <= 0.0f || CellSizeX <= 0.0f || CellSizeY <= 0.0f)
-	{
-		return false;
-	}
-
-	OutResolution = FIntPoint(
-		FMath::Max(1, FMath::CeilToInt32(BoundsSize.X / CellSizeX)),
-		FMath::Max(1, FMath::CeilToInt32(BoundsSize.Y / CellSizeY)));
-	return IsValidMinimapResolution(OutResolution);
-}
-
-bool UMinimapDataSubsystem::EnsureMinimapGridReady()
-{
-	if (bMinimapGridInitialized)
-	{
-		return true;
-	}
-
-	if (ApplyMinimapGridFromRangeConfig())
-	{
-		bMinimapGridInitialized = true;
-		return true;
-	}
-
-	if (ApplyMinimapGridFromCurrentBounds())
-	{
-		bMinimapGridInitialized = true;
-		return true;
-	}
-
-	return TryAutoResolveMinimapGridFromHashGrid();
-}
 
 void UMinimapDataSubsystem::SyncFogOfWarRuntimeOptions(float InVisionBlockingDeltaHeightThreshold, float InVisionUpdateWorldDistanceThreshold, bool bInDebugStressTestIgnoreCache, bool bInDebugStressTestMinimap)
 {
@@ -473,13 +276,11 @@ void UMinimapDataSubsystem::SyncMinimapDisplayOptions(
 	RebuildTeamDisplayColorCache();
 }
 
-void UMinimapDataSubsystem::SyncVisionGridParameters(const FVector2D& InGridOrigin, const FVector2D& InGridSize, float InVisionTileSize, const FIntPoint& InVisionResolution)
+void UMinimapDataSubsystem::SyncVisionGridParameters(const FVector2D&, const FVector2D&, float InVisionTileSize, const FIntPoint& InVisionResolution)
 {
 	bVisionGridActive = false;
-	bMinimapGridInitialized = false;
 
-	GridBottomLeftWorldLocation = InGridOrigin;
-	GridSize = InGridSize;
+	ReadMapRegionIni(GetWorld(), GridBottomLeftWorldLocation, GridSize);
 	// Fallback to the plugin's historical default tile size (100 cm) to keep behavior
 	// predictable when callers pass an invalid value, while preserving reasonable density.
 	const float SafeVisionTileSize = InVisionTileSize > 0.0f ? InVisionTileSize : DefaultVisionTileSize;
@@ -495,7 +296,7 @@ void UMinimapDataSubsystem::SyncVisionGridParameters(const FVector2D& InGridOrig
 		VisionGridResolution.Y = FMath::Max(1, FMath::CeilToInt32(GridSize.Y / SafeVisionTileSize));
 	}
 
-	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
+	ApplyMinimapGridFromCurrentBounds();
 
 	const int32 NumVisionTiles = VisionGridResolution.X * VisionGridResolution.Y;
 	if (GridSize.X > 0.0f && GridSize.Y > 0.0f && SafeVisionTileSize > 0.0f && NumVisionTiles > 0)
@@ -512,12 +313,10 @@ void UMinimapDataSubsystem::SyncVisionGridParameters(const FVector2D& InGridOrig
 	}
 }
 
-void UMinimapDataSubsystem::SyncWorldBounds(const FVector2D& InGridOrigin, const FVector2D& InGridSize)
+void UMinimapDataSubsystem::SyncWorldBounds(const FVector2D&, const FVector2D&)
 {
 	bVisionGridActive = false;
-	GridBottomLeftWorldLocation = InGridOrigin;
-	GridSize = InGridSize;
-	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
+	ApplyMinimapGridFromMapRegion();
 }
 
 void UMinimapDataSubsystem::SetVisionGridActive(bool bInActive)
@@ -532,16 +331,6 @@ bool UMinimapDataSubsystem::IsVisionGridReady() const
 		VisionGridResolution.X > 0 &&
 		VisionGridResolution.Y > 0 &&
 		VisionTiles.Num() == VisionGridResolution.X * VisionGridResolution.Y;
-}
-
-bool UMinimapDataSubsystem::IsMinimapGridReady() const
-{
-	return
-		MinimapTileSize.X > 0.0f &&
-		MinimapTileSize.Y > 0.0f &&
-		MinimapGridResolution.X > 0 &&
-		MinimapGridResolution.Y > 0 &&
-		MinimapTiles.Num() == MinimapGridResolution.X * MinimapGridResolution.Y;
 }
 
 bool UMinimapDataSubsystem::IsLocationVisible(const FVector& WorldLocation) const
@@ -582,20 +371,17 @@ bool UMinimapDataSubsystem::IsBlockingVision(float ObserverHeight, float Potenti
 	return PotentialObstacleHeight - ObserverHeight > VisionBlockingDeltaHeightThreshold;
 }
 
-void UMinimapDataSubsystem::InitMinimapGrid(const FVector2D& InGridOrigin, const FVector2D& InGridSize, const FIntPoint& InResolution)
+void UMinimapDataSubsystem::InitMinimapGrid(const FVector2D&, const FVector2D&, const FIntPoint& InResolution)
 {
-	GridBottomLeftWorldLocation = InGridOrigin;
-	GridSize = InGridSize;
 	bMinimapResolutionExplicitlySet = IsValidMinimapResolution(InResolution);
 	MinimapGridResolution = bMinimapResolutionExplicitlySet ? InResolution : FIntPoint::ZeroValue;
-	bMinimapGridInitialized = false;
 	
-	if (!ApplyMinimapGridFromCurrentBounds())
+	if (!ApplyMinimapGridFromMapRegion())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[MinimapDataSubsystem] InitMinimapGrid called with invalid GridSize!"));
+		UE_LOG(LogTemp, Warning, TEXT("[MinimapDataSubsystem] InitMinimapGrid failed to apply MapRegion bounds."));
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Manually Initialized Grid. Origin:%s, Size:%s, Res:%s, TileSize:%s"),
+	UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Initialized Grid from MapRegion. Origin:%s, Size:%s, Res:%s, TileSize:%s"),
 		*GridBottomLeftWorldLocation.ToString(), *GridSize.ToString(), *MinimapGridResolution.ToString(), *MinimapTileSize.ToString());
 
 	if (UMassBattleHashGridSubsystem* HashGrid = GetWorld()->GetSubsystem<UMassBattleHashGridSubsystem>())
@@ -606,7 +392,6 @@ void UMinimapDataSubsystem::InitMinimapGrid(const FVector2D& InGridOrigin, const
 		HashGrid->GridOrigin.Y = GridBottomLeftWorldLocation.Y;
 		UE_LOG(LogTemp, Log, TEXT("[MinimapDataSubsystem] Synced MassBattleHashGrid Origin to: %s"), *HashGrid->GridOrigin.ToString());
 	}
-	bMinimapGridInitialized = ApplyMinimapGridFromCurrentBounds();
 }
 
 void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, int32 BlockRadius)
@@ -626,12 +411,6 @@ void UMinimapDataSubsystem::UpdateMinimapFromHashGrid(FVector CenterLocation, in
 	const bool bCollectDetailedStats = bCollectStats && bEnableDetailedMinimapPerformanceStats;
 	FMinimapHashGridPerfStats Stats;
 	
-	// Zero Overhead Check: If Minimap hasn't been initialized, do nothing.
-	if (!EnsureMinimapGridReady())
-	{
-		return;
-	}
-
 	// 1. 获取必要的子系统
 	UMassBattleHashGridSubsystem* HashGrid = UMassBattleHashGridSubsystem::GetPtr(GetWorld());
 	UMassEntitySubsystem* EntitySubsystem = GetWorld()->GetSubsystem<UMassEntitySubsystem>();
