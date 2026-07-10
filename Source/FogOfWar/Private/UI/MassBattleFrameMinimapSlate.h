@@ -7,6 +7,8 @@
 #include "Rendering/RenderingCommon.h"
 #include "Widgets/SLeafWidget.h"
 
+struct FMassBattleMinimapGpuTimingState;
+
 struct FMassBattleMinimapUploadData
 {
 	TArray<FVector> Locations;
@@ -54,6 +56,7 @@ private:
 	uint32 ViewingTeamIndex_RenderThread = 0;
 	uint32 AgentCount_RenderThread = 0;
 	uint32 TeamColorCount_RenderThread = 0;
+	TUniquePtr<FMassBattleMinimapGpuTimingState> GpuTimingState;
 };
 
 using FMassBattleMinimapRenderDataPtr = TSharedPtr<FMassBattleMinimapRenderData, ESPMode::ThreadSafe>;
