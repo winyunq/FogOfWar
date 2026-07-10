@@ -94,7 +94,7 @@ protected:
 	virtual const FText GetPaletteCategory() override;
 #endif
 
-	/** Logical cells along the minimap's long axis; it never changes widget layout size. */
+	/** Logical cells per map axis; it never changes widget layout size. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Raster", meta = (ClampMin = "16", ClampMax = "2048", UIMin = "64", UIMax = "1024", DisplayName = "Logical Resolution"))
 	int32 MinimapResolution = 256;
 

@@ -3,7 +3,6 @@
 #include "MassVisionTrait.h"
 #include "FogOfWarMassBinding.h"
 #include "MassEntityTemplateRegistry.h"
-#include "MassRepresentationFragments.h" // For FMassRepresentationFragment
 
 void UMassVisionTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const
 {
@@ -22,17 +21,4 @@ void UMassVisionTrait::BuildTemplate(FMassEntityTemplateBuildContext& BuildConte
 		VisionFragment.SightRadius = SightRadius;
 	}
 
-	// 根据配置添加小地图表示相关的Fragment和Tag
-	if (bShouldBeRepresentedOnMinimap)
-	{
-		BuildContext.AddFragment<FMassPreviousMinimapCellFragment>(); // Add fragment for the observer
-
-		// 【核心修改】单位诞生时，即标记为“已改变”，以便更新器在第一帧处理它
-		BuildContext.AddTag<FMinimapCellChangedTag>();
-
-		if (bAlwaysVisibleOnMinimap)
-		{
-			BuildContext.AddTag<FMassMinimapVisibleTag>();
-		}
-	}
 }

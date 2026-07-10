@@ -31,14 +31,6 @@
 			"Enabled": true
 		},
 		{
-			"Name": "EnhancedInput",
-			"Enabled": true
-		},
-		{
-			"Name": "Niagara",
-			"Enabled": true
-		},
-		{
 			"Name": "OpenRTSCamera",
 			"Enabled": true
 		}

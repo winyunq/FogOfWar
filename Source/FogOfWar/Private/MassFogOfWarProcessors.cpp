@@ -333,7 +333,6 @@ void UMassBattleFogOfWarBootstrapProcessor::Execute(FMassEntityManager& EntityMa
 		const TArrayView<const FMassEntityHandle> Entities = Context.GetEntities();
 
 		const bool bHasPreviousVision = Context.DoesArchetypeHaveFragment<FMassPreviousVisionFragment>();
-		const bool bHasPreviousMinimapCell = Context.DoesArchetypeHaveFragment<FMassPreviousMinimapCellFragment>();
 		const bool bHasVisionEntityTag = Context.DoesArchetypeHaveTag<FMassVisionEntityTag>();
 		const bool bHasVisibleEntityTag = Context.DoesArchetypeHaveTag<FMassVisibleEntityTag>();
 
@@ -348,11 +347,6 @@ void UMassBattleFogOfWarBootstrapProcessor::Execute(FMassEntityManager& EntityMa
 			if (!bHasPreviousVision)
 			{
 				Context.Defer().PushCommand<FMassCommandAddFragmentInstances>(Entity, FMassPreviousVisionFragment());
-			}
-
-			if (!bHasPreviousMinimapCell)
-			{
-				Context.Defer().PushCommand<FMassCommandAddFragmentInstances>(Entity, FMassPreviousMinimapCellFragment());
 			}
 
 			if (!bHasVisionEntityTag)
@@ -440,26 +434,17 @@ void UDebugStressTestProcessor::Execute(FMassEntityManager& EntityManager, FMass
 	}
 
 	const bool bForceVisionUpdate = MinimapSubsystem->bDebugStressTestIgnoreCache;
-	const bool bForceMinimapUpdate = MinimapSubsystem->bDebugStressTestMinimap;
-
-	if (!bForceVisionUpdate && !bForceMinimapUpdate)
+	if (!bForceVisionUpdate)
 	{
 		return;
 	}
 
-	EntityQuery.ForEachEntityChunk(Context, [this, bForceVisionUpdate, bForceMinimapUpdate](FMassExecutionContext& Context)
+	EntityQuery.ForEachEntityChunk(Context, [](FMassExecutionContext& Context)
 	{
 		const auto& Entities = Context.GetEntities();
 		for (const FMassEntityHandle& Entity : Entities)
 		{
-			if (bForceVisionUpdate)
-			{
-				Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
-			}
-			if (bForceMinimapUpdate)
-			{
-				Context.Defer().AddTag<FMinimapCellChangedTag>(Entity);
-			}
+			Context.Defer().AddTag<FMassLocationChangedTag>(Entity);
 		}
 	});
 }

@@ -1,462 +1,178 @@
-# Winyunq FogOfWar High-Performance Architecture
+# FogOfWar — Mass Battle GPU Minimap
 
-本项目是专为 **MassBattleFrame** 设计的高性能战争迷雾解决方案。它利用 Mass Entity System (ECS) 的数据驱动特性和 Sparse Hash Grid（稀疏哈希网格）技术，旨在支持 4096*4096 甚至更大的超大规模地图。
+当前 `Mass` 分支的小地图只有一条实现路径：`UMassBattleFrameMinimapWidget` 直接读取 Mass Battle Frame 已经维护的渲染批数组，低频上传到持久 GPU Buffer，再由 Slate 自定义绘制和 Global Shader 直接画入 Widget 的屏幕区域。
 
-## 1. 核心架构设计
+它不使用 Niagara、Niagara Data Channel、CPU 单位遍历、Mass Entity Query、小地图 HashGrid、材质小地图、SceneCapture、独立 RenderTarget 或世界空间特效。
 
-### 1.1 MassBattle 核心组件集成 (Core MassBattle Integration)
+## 使用
 
-本插件的设计哲学是 **"Follower Architecture" (跟随者架构)**。我们不创造新的世界真理，而是从 MassBattle 中读取真理。以下是 FogOfWar 深度依赖的 MassBattle 核心组件及其数据定义：
+使用以下任一种方式放置小地图：
 
-1.  **位置源 (Position Source) - `FLocating`**
-    *   **定义**: `Fragments/Transform.h`
-    *   **C++ 结构**:
-        ```cpp
-        USTRUCT(BlueprintType)
-        struct MASSBATTLE_API FLocating : public FA_MassBattleBaseFragment
-        {
-            GENERATED_BODY()
-            // Units location. This is the TRUTH we read.
-            UPROPERTY(...)
-            FVector Location = FVector::ZeroVector; 
-            ...
-        };
-        ```
-    *   **作用**: FogOfWar 每一帧读取此 `Location` 来计算单位在 World Partition Grid 中的索引。
+- 在 UMG 中放置原生 `Mass Battle Frame Minimap` 控件。
+- 使用插件资产 `Content/Core/MassBattleFrameMiniMap.uasset`。
 
-2.  **阵营源 (Faction Source) - `FTeam`**
-    *   **定义**: `Fragments/Team.h`
-    *   **C++ 结构**: `struct FTeam { int32 index; }`
-    *   **自定义关系 (Relationship Strategy)**:
-        *   我们**不硬编码** `TeamA == TeamB`。
-        *   **解决方案**: FogOfWar 将暴露一个 **可绑定的静态委托 (Static Delegate)** 或 **宏 (Macro)** 接口：
-            ```cpp
-            // FTeamRelationshipResolver::IsAlly(int32 ObserverTeam, int32 TargetTeam)
-            // 默认实现: return ObserverTeam == TargetTeam;
-            // 用户重写: return (ObserverTeam & TargetTeam) != 0; // 举例：位运算同盟
-            ```
-        *   这允许用户用任意逻辑（位掩码、查表、异或）来定义“谁能共享视野”。
+Widget 的布局位置和尺寸就是最终 GPU 绘制区域。`NativeConstruct` 会自动初始化并立即推送第一帧，之后由 `Update Rate` 控制定时更新。
 
-3.  **核心数据源 (Core Data Source) - Spatial Hashing**
-    *   **定义**: `MassBattleHashGridSubsystem`
-    *   **机制**:
-        *   这也是我们的**唯一真理来源**。FogOfWar **不会**去遍历 `FMassEntityManager` 中的 Entity 列表（那太慢了）。
-        *   **Spatial Hashing**: MassBattle 将无限的世界切分为 `300cm x 300cm` 的 `Cell`，每 `16x16x16` 个 Cell 组成一个 `Block`。
-        *   **Sparse Iteration (稀疏遍历)**:
-            *   对于小地图 (Minimap) 和迷雾，我们需要的数据就在 `FHashGridAgentCell` 中。
-            *   **极速访问**: 我们只需要遍历玩家视野覆盖的那些 Block (约 16x16 = 256 个 Block)，就能获取所有相关单位的信息。
-            *   **直接访问**: 通过 `MassBattleHashGrid->GetAgentCellAt(Coord)`，我们可以直接拿到紧凑排列的单位数组，这是 CPU 缓存极其友好的。
+默认 `Update Rate = 1/3 Hz`，即每 3 秒读取并上传一次新数据。两次更新之间不会重新读取单位；Slate 只用缓存的 GPU Buffer 重画，因此画面可以正常参与 UMG 合成而不会实时追踪单位数据。
 
-### 1.2 核心流程 (Core Process Flow)
-
-既然 `MassBattleFrame` 是不可修改的宿主 (Immutable Host)，我们的插件是一个增强模块。以下流程图展示了 `FogProcessor` 如何从 MassBattle 中**提取**所需数据并**处理**成迷雾。
-
-```mermaid
-graph TD
-    subgraph MassBattleFrame ["MassBattleFrame (Immutable Host)"]
-        direction TB
-        HashGrid[MassBattleHashGrid]
-        
-        subgraph EntityFragments ["Entity Data Fragments"]
-            Loc[FLocating]
-            Team[FTeam]
-            Vision[FMassVisionFragment]
-        end
-    end
-
-    subgraph FogOfWarPlugin ["FogOfWar (Extension)"]
-        direction TB
-        Interface[IFogGridProvider]
-        TeamLogic[FTeamResolver Delegate]
-        Processor[Fog Processor]
-        Output[Fog Texture / Buffer]
-    end
-
-    %% 1. 空间查询
-    HashGrid -.->|Implements| Interface
-    Interface -->|1. Get Occupied Blocks| Processor
-    
-    %% 2. 数据读取
-    Processor -->|2. Query Entity Data| EntityFragments
-    EntityFragments -.->|Return Location| Loc
-    EntityFragments -.->|Return SightRadius| Vision
-    
-    %% 3. 逻辑判断
-    Processor -->|3. Check Logic| TeamLogic
-    TeamLogic -.->|Read Index| Team
-    
-    %% 4. 写入结果
-    TeamLogic -->|Is Ally?| Processor
-    Processor -->|4. Rasterize Vision| Output
-```
-
-### 1.2 核心理念: 强依赖与直接调用 (Direct Dependency)
-
-**拒绝中间层，拒绝数据同步。**
-
-*   **现状**: `MassBattleFrame` 已经拥有完美空间索引的 `MassBattleHashGrid`。
-*   **错误做法**: 创建一个 `FogIntegration` 层，把 Mass 的数据 Copy 一份传给 Fog。
-*   **正确做法**: `FogOfWar` **强依赖** `MassBattle`。
-    *   **Direct Call**: 迷雾系统直接调用 `MassBattleHashGridSubsystem->GetAgentGrid()`。
-    *   **Zero Copy**: 不需要维护任何“迷雾单位列表”。数据源永远只有一个：`MassBattleHashGrid`。
-
-#### 1.3.1 输入接口 (Input API)
-*   **显式启动**: `UFogOfWarSubsystem::Get(World)->StartFogOfWar(Config)`
-*   **配置**: 传入 `UFogOfWarConfig` 或直接使用 MassBattle 的配置。
-
-### 1.3 核心战略: 剥削 MassBlock (Exploiting Mass Structure)
-
-这不再是一个“移植”问题，而是一个 **“挂载”** 问题。我们将迷雾计算 **挂载** 在 `MassBattleHashGrid` 的既有结构上。
-
-#### 1.3.1 既有结构 (The Existing Structure)
-`MassBattleHashGrid` 已经在内存中维护了 **16x16x16** 的 `Block` 结构 (LOD2)。
-*   这是事实标准，不需要我们重新划分。
-*   内存中已有 `TMap<FIntVector, TSharedPtr<FAgentGridBlock>> AgentGrid`。
-
-#### 1.3.2 直接访问 (Direct Access Strategy)
-*   **小地图更新**:
-    1.  `FogOfWar` 想要更新某个区域？直接计算出对应的 `Block Coordinate`。
-    2.  直接指针访问: `MassBattleHashGrid->AgentGrid.Find(BlockCoord)`。
-    3.  **如果指针为空**: 证明该区域无单位，直接跳过 (Cost = 0)。
-    4.  **如果指针存在**: 直接遍历 Block 内的 `Cells` 获取视野半径。
-
-#### 1.3.3 真正的零开销 (True Zero Overhead)
-*   我们不创建新网格。
-*   我们不复制单位数据。
-*   我们甚至不遍历 Entity Array，而是直接读 HashGrid 的内存热区。
-
-
-#### 1.3.3 输出接口 (Output Usage)
-(输出到材质部分的逻辑保持不变，材质依然采样这张通过差分同步更新的 Texture)
-```hlsl
-// HLSL 采样逻辑同上...
-```
-
-### 1.4 深度集成 (Deep Integration)
-
-为了贯彻 "如无必要，勿增实体" 的原则，我们将直接利用 MassBattle 的现有资产：
-...
-
-## 2. 数据流 (Data Flow)
-
-### 2.1 架构概览 (Architecture Overview)
-
-为了让您对各个类及其职责一目了然，我们整理了以下架构表：
-
-| Class (类名)                    | Function (函数/职责)                              | File Location (文件路径) | Description (说明)                                             |
-| :------------------------------ | :------------------------------------------------ | :----------------------- | :------------------------------------------------------------- |
-| **AFogOfWar**                   | `UpdateVisibilities`<br>`ResetCachedVisibilities` | `Core/`                  | **真理管理者**。执行核心 DDA 算法，维护全局 `FTile` 计数网格。 |
-| **UVisionProcessor**            | `Execute`                                         | `Processors/`            | **Mass 驱动器**。监听位置变化，驱动增量更新逻辑。              |
-| **MinimapDataSubsystem**        | `UpdateVisionGrid`                                | `Integration/`           | **数据中转**。存储小地图图层数据，管理坐标转换。               |
-| **FMassVisionFragment**         | N/A (Data)                                        | `Fragments/`             | **配置数据**。存储单位视野半径、颜色等。                       |
-| **FMassPreviousVisionFragment** | N/A (Cache)                                       | `Fragments/`             | **局部更新缓存**。存储上一帧视野状态，用于“擦除”旧视野。       |
-
-### 2.2 目录结构 (File Structure)
-
-基于 Winyunq 风格与分层解耦原则，我们将插件源码划分为以下核心模块：
+## 唯一数据链
 
 ```text
-Plugins/FogOfWar/Source/FogOfWar/
-├── Core/           # 真理层：AFogOfWar, DDA算法。核心可见性计算。
-├── Processors/     # 驱动层：MassFogOfWarProcessors。监听 Mass 移动并驱动更新。
-├── Fragments/      # 数据层：MassFogOfWarFragments。定义视野与缓存组件。
-├── Integration/    # 桥接层：MinimapDataSubsystem。中转 2D 数据供 UI 消费。
-├── UI/             # 合成层：MinimapWidget。利用材质进行多层“交并”显示。
-└── Utils/          # 工具层：网格映射、坐标转换原子逻辑。
+UMassBattleFrameMinimapWidget
+  -> UMassBattleSubsystem::AgentRenderers
+  -> AMassBattleAgentRenderer::SpawnedRenderBatches
+  -> 批量 Append 已有连续数组
+       LocationArray
+       DynamicParams0_Array
+       IsHiddenArray
+  -> 一次异步 Render Command
+  -> 持久 GPU Buffer
+  -> Slate Custom Element
+  -> Global Shader 直接画入 Widget 区域
 ```
 
-### 2.3 初始化阶段 (Initialization)
-1.  **配置**: 开发者在 `MassAgentConfig` 中为实体添加 `FMassVisionFragment`。
-2.  **生成**: Mass 自动注入 `FMassPreviousVisionFragment` 作为增量更新的缓存。
-3.  **激活**: 通过 `StartFogOfWar` 初始化全局 `AFogOfWar` 管理器。
+CPU 只遍历 Renderer 和 Render Batch，并对每个连续数组执行 `TArray::Append`。没有逐单位投影、过滤、重组或 Mass Entity 遍历。坐标换算、Team ID、尺寸取整、隐藏判断和绘制全部在 GPU 完成。
 
-### 2.4 运行时更新 (Runtime Update)
+## GPU 绘制规则
 
-1.  **游戏迷雾 (High Frequency)**: 相机移动 -> 查询 `HashGrid` 周边 Block -> 更新材质参数 (Viewport Rect)。
-2.  **小地图 (Low Frequency)**: 定时器/事件驱动 -> 遍历 256 个缓存 Block -> 多线程 DDA 更新 FTile 网格 -> 写入小地图纹理。
+### 坐标
 
-
-## 3. 性能目标 (Performance Goals)
-
-*   **内存占用**: 仅随活跃区域线性增长，而非随地图尺寸平方增长。
-*   **CPU消耗**: 利用 Mass 的多线程 Processor，并行计算每个 Block 的视野更新。
-*   **扩展性**: 理论支持无限大地图，仅受限于内存总量。
-
-## 4. 迁移指南 (Migration Guide)
-
-如果您是从旧版 FogOfWar 迁移而来：
-*   ❌ **移除**: 不要再给 Actor 添加 `VisionComponent`。
-*   ✅ **配置**: 直接在 MassBattle 的 DataAsset 中配置 Vision 属性。
-*   ✅ **依赖**: 确保您的 `MassBattleFrame` 插件正确依赖了本插件。
-
-## 5. 当前版本使用方式（屏幕后处理 + 小地图）
-
-### 5.0 当前资产清单
-
-当前 Mass 分支只保留一套主画面迷雾材质和一套小地图材质资产，不再维护旧版多阶段插值/超采样材质链。
-
-保留/新增资产：
-
-```text
-Content/Core/BP_FogOfWar.uasset
-Content/Core/MassBattleFogOfWar.uasset
-Content/Core/Materials/M_FogOfWar.uasset
-Content/Core/Materials/MinimapTarget.uasset
-Content/Core/MiniMap.uasset
-```
-
-已移除的旧材质资产：
-
-```text
-Content/Core/Materials/MF_FogOfWarSampleFinalVisibilityTexture.uasset
-Content/Core/Materials/MF_FogOfWarTileSamplingHelper.uasset
-Content/Core/Materials/M_FogOfWarAfterInterpolation.uasset
-Content/Core/Materials/M_FogOfWarInterpolation.uasset
-Content/Core/Materials/M_FogOfWarPostProcessing.uasset
-Content/Core/Materials/M_FogOfWarSuperSampling.uasset
-```
-
-资产用途：
-
-| Asset | 用途 |
-| :-- | :-- |
-| `BP_FogOfWar` | 可直接放入关卡的战争迷雾 Actor 蓝图，默认绑定当前 GPU 圆形源后处理材质。 |
-| `MassBattleFogOfWar` | MassBattle 集成示例/预设资产，用于项目内快速接入当前 Mass 分支配置。 |
-| `M_FogOfWar` | 主画面战争迷雾后处理材质。读取 `FOW_SceneGpuVisionSourceTexture` 和 `FOW_SceneGpuVisionSourceCount`。 |
-| `MiniMap` | 小地图 Widget/示例资产，配合 `UMinimapWidget` 使用。 |
-| `MinimapTarget` | 小地图材质资产，读取单位位置、单位颜色和视野源数据纹理。 |
-
-### 5.1 玩家主画面迷雾（后处理）
-本插件当前采用**对玩家看到的场景进行后处理**的方式输出迷雾效果。
-你需要在关卡里放置并配置 `AFogOfWar`：
-
-1. 放置 `BP_FogOfWar` 或 `AFogOfWar` Actor。
-2. 配置 `PostProcessingMaterial`，推荐使用 `Content/Core/Materials/M_FogOfWar.uasset`。
-3. 保持 `bAutoActivate=true`（或在运行时手动调用 `Activate`）。
-4. 在 Mass 实体原型上添加 `UMassVisionTrait`，给单位配置 `SightRadius`（大于 0）。
-
-> 当前主画面迷雾走 GPU 圆形视野源后处理路径。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 路径已经移除。
-> `AFogOfWar` 和 `AMassBattleFrameFogOfWar` 都以自身 Actor 位置为中心，使用 `WorldGridSize` 作为世界范围，因此蓝图 Actor 可以直接拖入关卡运行。
-
-### 5.2 小地图
-小地图走 `UMinimapDataSubsystem::UpdateMinimapFromHashGrid` 路径（HashGrid 降采样），`UMinimapWidget` 会在 Tick 中触发更新。
-
-1. 确保 `UMinimapWidget` 设置了 `MinimapMaterial`，推荐使用 `Content/Core/Materials/MinimapTarget.uasset`。
-2. 通过 `TextureResolution` 配置小地图分辨率（默认 256x256）。
-3. 单位需带 `UMassVisionTrait` 且 `bShouldBeRepresentedOnMinimap=true`。
-4. 队伍色、普通/选中亮度和战斗白色会从当前关卡的 `MinimapColors.ini` 读取；文件不存在时由 `UMinimapWidget`/`MapRegion` 用默认值导出。
-
-#### 5.2.1 Mass Battle Frame 小地图实验
-
-新增 `UMassBattleFrameMinimapWidget` 作为 MassBattle 前缀 GPU/NDC 对照控件。它不继承 `UMinimapWidget`，但保留 `InitializeMinimapSystem` 和 `ConvertMinimapUVToWorldLocation` 这两个蓝图入口，便于用控件替换做 A/B：
-
-```text
-相机地面四边形 -> HashGrid occupied cells -> 镜头内单位 -> Niagara Data Channel -> Niagara 小地图渲染
-```
-
-性能会写入同一个：
-
-```text
-Saved/Logs/FogOfWar_MinimapPerf.csv
-```
-
-新 channel 为：
-
-```text
-MassBattleFrameMinimapNdcProducerAvg
-MassBattleFrameMinimapNdcRenderTargetAvg
-```
-
-注意：`MassBattleFrameMinimapNdcProducerAvg` 只统计 CPU 侧 HashGrid 收集和 Niagara Data Channel 写入，不包含 Niagara/GPU 绘制、RenderTarget 或 UMG 呈现成本。`MassBattleFrameMinimapNdcRenderTargetAvg` 是当前完整 Widget fallback：写 NDC 后把同一批单位点绘制到小地图 RenderTarget 并显示到 `MinimapImage`，可用于端到端真实性能测试。
-
-场景战争迷雾新增 `AMassBattleFrameFogOfWar` 独立 Actor。它不继承 `AFogOfWar`，但保留同名核心属性/函数和相同后处理材质参数契约：
-
-```text
-FOW_SceneGpuVisionSourceTexture
-FOW_SceneGpuVisionSourceCount
-FOW_EnableSceneGpuVisionSources
-```
-
-对比时在关卡里替换 Actor 类即可。场景性能写入：
-
-```text
-Saved/Logs/FogOfWar_ScenePerf.csv
-```
-
-新 channel 为：
-
-```text
-MassBattleFrameSceneGpuVisionAvg
-```
-
-详细 NDC 变量契约和场景战争迷雾说明见 `Docs/MASS_BATTLE_FRAME_GPU_MINIMAP.md`。
-
-### 5.3 常见故障排查
-
-如果出现“有后处理材质但迷雾不更新”，优先检查：
-
-1. 是否有 `AFogOfWar` 或 `AMassBattleFrameFogOfWar` 且已激活。
-2. 视野单位是否带 `UMassVisionTrait` 且 `SightRadius > 0`。
-3. `PostProcessingMaterial` 是否使用当前 `M_FogOfWar`，且材质参数名与插件中使用的参数一致（`FOW_*`）。
-4. `FOW_SceneGpuVisionSourceCount` 是否达到 `MaxSceneGpuVisionSources` 上限；达到上限时，超出的视野源不会上传。
-
-### 5.4 Mass 分支补充说明
-
-GitHub 默认分支应设置为 `Mass`。当前 MassBattle 集成版本显式依赖以下插件：
-
-1. `MassBattle`
-2. `MassGameplay`
-3. `EnhancedInput`
-
-还依赖 UE 的 Mass、UMG、Slate、RHI、RenderCore、EnhancedInput 等模块；具体以 `FogOfWar.uplugin` 和 `Source/FogOfWar/FogOfWar.Build.cs` 为准。
-
-当前 Mass 分支的场景战争迷雾已经裁剪为 GPU 圆形源后处理路径。baseline 使用 `AFogOfWar`，MassBattle 对照路径使用 `AMassBattleFrameFogOfWar`。两者场景主画面只需要配置 `PostProcessingMaterial`。旧的 `InterpolationMaterial`、`AfterInterpolationMaterial`、`SuperSamplingMaterial`、`FOW_FinalVisibilityTexture` 主画面路径不再作为场景迷雾主路径使用。
-
-FogOfWar 核心模块不强制依赖 `OpenRTSCamera`。`URTSMinimapControllerWidget` 只广播小地图点击/拖动得到的世界坐标；如果项目使用 RTS 相机，请在项目侧或相机插件侧绑定 `OnWorldLocationRequested` 并执行相机跳转。
-
-关卡里的小地图区域配置负责导出 `MapRegion.ini`，小地图单位颜色配置使用同目录的 `MinimapColors.ini`。两者都按当前关卡名绑定。
-
-#### 5.4.1 Shared MapRegion INI
-
-小地图区域配置把当前 Box 范围导出到：
+地图范围来自当前关卡中的 `AMapRegion`。没有 Actor 时读取：
 
 ```text
 <Project>/Config/MapRegion/<MapName>/MapRegion.ini
 ```
 
-```ini
-[MapRegion]
-OriginX=0
-OriginY=0
-SizeX=409600
-SizeY=409600
-CenterX=204800
-CenterY=204800
-ExtentX=204800
-ExtentY=204800
-MapOverflowUU=0
-MinimapResolutionX=1024
-MinimapResolutionY=1024
-HashGridCellSizeX=300
-HashGridCellSizeY=300
-HashGridResolutionX=1366
-HashGridResolutionY=1366
+两者都没有有效自定义值时使用中心位于世界原点、大小为 `65536 × 65536 UU` 的缺省范围。
+
+Shader 首先计算：
+
+```text
+UV = (WorldXY - MapMin) / MapSize
 ```
 
-`OpenRTSCamera` 通过相同文件名和 section 名读取这个协议，不链接 `FogOfWar` C++ 模块。这是当前镜头边界和小地图单位坐标投影之间的桥。
+随后将世界坐标逆时针旋转 90°映射到小地图：
 
-#### 5.4.2 Per-Level Minimap Color INI
+```text
+ScreenUV = (UV.y, 1 - UV.x)
+```
 
-小地图单位颜色导出到：
+### 逻辑分辨率与向上取整
+
+`Logical Resolution` 表示地图每个轴的逻辑像素数，不改变 Widget 的真实布局尺寸。默认值为 `256`。
+
+单位或视野的世界直径先换算成逻辑像素，再逐轴向上取整：
+
+```text
+LogicalSize = max(ceil((2 * RadiusUU) * LogicalResolution / MapSize), 1)
+```
+
+最后按 Widget 的真实尺寸整体缩放。结果保证任何非零单位或视野至少占一个逻辑像素；当分辨率为 `256` 时，最小绘制尺度就是整张地图的 `1/256`。
+
+- 单位绘制为正方形。
+- 视野绘制为圆形。
+- 非正方形地图或 Widget 下，单位仍取两轴结果中的较大值保持正方形，视野同样保持圆形。
+
+### Team ID 与颜色
+
+Mass Battle Frame 已把 Team ID 编码在 `DynamicParams0.W` 的低 10 位。Shader 直接取得：
+
+```text
+TeamID = asuint(DynamicParams0.W) & 1023
+Color = TeamColors[TeamID]
+```
+
+颜色配置文件为：
 
 ```text
 <Project>/Config/MapRegion/<MapName>/MinimapColors.ini
 ```
 
+格式：
+
 ```ini
 [MinimapUnitColors]
-Version=1
-DefaultTeamColor=(R=0.700000,G=0.700000,B=0.700000,A=1.000000)
-TeamColorCount=8
-TeamColor0=(R=0.360000,G=0.380000,B=0.420000,A=1.000000)
-TeamColor1=(R=0.050000,G=0.820000,B=0.340000,A=1.000000)
-bNormalizeTeamColorDirection=True
-NormalUnitColorLength=0.58
-SelectedUnitColorLength=1.00
-CombatUnitColor=(R=1.000000,G=1.000000,B=1.000000,A=1.000000)
-bEnableCombatColorFlash=True
-CombatColorFlashHz=3.50
-DefaultUnitPixelRadius=1.75
+DefaultTeamColor=(R=0.7,G=0.7,B=0.7,A=1.0)
+TeamColorCount=4
+TeamColor0=(R=0.45,G=0.45,B=0.45,A=1.0)
+TeamColor1=(R=0.10,G=0.72,B=0.18,A=1.0)
+TeamColor2=(R=0.85,G=0.12,B=0.10,A=1.0)
+TeamColor3=(R=0.12,G=0.34,B=0.95,A=1.0)
 ```
 
-`TeamColorN` 对应 `FTeam.index == N`。`UMinimapWidget` 初始化时会先确保这个文件存在，再读取它覆盖蓝图默认配色；已存在的文件不会被自动覆盖。需要重新从 Widget 默认值导出时，可调用 `ExportMinimapColorConfig`。
+GPU 颜色表固定覆盖 `0..1023`。缺少 `TeamColorN` 的 Team ID 使用 `DefaultTeamColor`，当前缺省色是最亮白色的 `0.7` 倍。
 
-小地图最简使用方式：
+### 单位、视野与战争迷雾
 
-1. 创建一个继承 `UMinimapWidget` 的 UMG。
-2. Widget 中放一个 `Image`，命名为 `MinimapImage`。
-3. 给 `MinimapMaterial` 绑定一个小地图材质。
-4. Add To Viewport。
+绘制顺序是：
 
-`UMinimapWidget` 会创建 RenderTarget 并绑定到 `MinimapImage`，同时驱动 `UMinimapDataSubsystem::UpdateMinimapFromHashGrid`。材质会收到：
+1. 绘制所有 `IsHidden == false` 的单位色块。
+2. 仅用 `TeamID == ViewingTeam` 且未隐藏的单位绘制圆形视野模板。
+3. 最后绘制黑色战争迷雾，但在视野模板覆盖的像素跳过，因此雾会正确遮住不可见单位。
+
+当前没有联盟/共享视野输入，所以不会猜测哪些 Team 是盟友。`Viewing Team` 只代表一个确切 Team ID；如果以后需要联盟共享视野，必须增加明确的 Team 关系输入。
+
+## 主要参数
+
+| 参数 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `Logical Resolution` | `256` | 地图每个轴的逻辑像素数；控制最小向上取整尺度。 |
+| `Update Rate` | `1/3 Hz` | 数据缓存更新频率；默认每 3 秒一次。 |
+| `Unit Radius` | `100 UU` | 单位正方形的世界半径。 |
+| `Vision Radius` | `4000 UU` | 当前 Viewing Team 的圆形视野半径。 |
+| `Fog Opacity` | `0.5` | 未揭示区域的黑色遮罩透明度。 |
+| `Viewing Team` | `0` | 唯一能揭示当前小地图迷雾的 Team ID。 |
+
+运行时可调用对应的 `SetUpdateRateHz`、`SetMinimapResolution`、`SetUnitRadiusUU`、`SetVisionRadiusUU`、`SetFogDarkenOpacity` 和 `SetViewingTeamIndex`。除更新频率外，参数修改会立即重新推送缓存。
+
+## 性能日志
+
+启用小地图后会输出三类日志：
 
 ```text
-VisionDataTexture / VisionSourceDataTexture: (WorldX, WorldY, Reserved, SightRadiusWorld)
-IconDataTexture / UnitLocationDataTexture:   (WorldX, WorldY, IconPixelRadius, Reserved)
-IconColorTexture / UnitColorDataTexture:     单位颜色
-NumberOfVisionSources
-NumberOfUnits
-GridBottomLeftWorldLocation
-GridSize / GridWorldSize
-UnitSize
+MassBattleMinimapPerf GT: Agents=... Batches=... BulkMergeAndSchedule=...ms UploadBytes=...
+MassBattleMinimapPerf RT: Agents=... BufferCreateAndUpload=...ms
+MassBattleMinimapPerf GPU: Agents=... UnitsAvg=...ms VisionAvg=...ms FogAvg=...ms TotalAvg=...ms
 ```
 
-### 5.5 高性能镜头战争迷雾材质写法
+- GT：批数组合并和提交 Render Command 的耗时，`CpuAgentTraversalCount` 固定为 `0`。
+- RT：创建/替换 GPU Buffer 并上传缓存的耗时，只在低频更新时发生。
+- GPU：每 15 次绘制异步采样一次，累计后输出单位、视野和雾三个 Pass 的平均值。
 
-镜头内战争迷雾不要走小地图数据，也不要把 tile 当作最终显示模型。CPU 只做收集和压缩：
+已记录的 `9,944` 单位样例为：GT `0.088 ms`、RT `0.150 ms`、GPU Units `0.033 ms`、Vision `0.037 ms`、Fog `0.004 ms`、GPU Total `0.097 ms`。这是一次场景测量，不是硬件无关保证。
 
-1. 用 `MassBattleHashGridSubsystem` 遍历当前活跃 HashGrid cell。
-2. 按真实单位位置上传圆形视野源。
-3. 把圆形视野源上传给后处理材质。
+## 当前保留资产与源码
 
-后处理材质接收：
+小地图运行时核心只有：
 
 ```text
-FOW_SceneGpuVisionSourceTexture: (WorldX, WorldY, SightRadius, Reserved)
-FOW_SceneGpuVisionSourceCount
-FOW_EnableSceneGpuVisionSources
+Content/Core/MassBattleFrameMiniMap.uasset
+Shaders/Private/MassBattleMinimap.usf
+Source/FogOfWar/Public/UI/MassBattleFrameMinimapWidget.h
+Source/FogOfWar/Private/UI/MassBattleFrameMinimapWidget.cpp
+Source/FogOfWar/Private/UI/MassBattleFrameMinimapSlate.h
+Source/FogOfWar/Private/UI/MassBattleFrameMinimapSlate.cpp
+Source/FogOfWar/Public/Minimap/MapRegion.h
+Source/FogOfWar/Private/Minimap/MapRegion.cpp
 ```
 
-材质核心是“每个屏幕像素按世界坐标测试是否落在任意视野圆内”：
+`Content/Core/Materials/MinimapTarget.uasset` 仍被当前 Widget Blueprint 的基础地图图层引用，但不参与单位或战争迷雾计算。
 
-```hlsl
-float Visible = 0.0;
+## 明确不存在的旧路径
 
-if (FOW_EnableSceneGpuVisionSources > 0.5)
-{
-    [loop]
-    for (int SourceIndex = 0; SourceIndex < (int)FOW_SceneGpuVisionSourceCount; ++SourceIndex)
-    {
-        float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
-        float2 Delta = CurrentPixelWorldXY - Source.xy;
-        float RadiusSq = Source.z * Source.z;
+仓库不再保留以下小地图实现，以免它们被误认为可选方案：
 
-        Visible = max(Visible, dot(Delta, Delta) <= RadiusSq ? 1.0 : 0.0);
-    }
-}
-```
+- `UMinimapWidget` CPU/HashGrid/RenderTarget 路径
+- `MassMinimapProcessors` 与 `MinimapCellObserver`
+- Niagara / NDC 小地图资产
+- 小地图材质数据纹理上传
+- 世界空间 Niagara 预览或摄像机前移动方案
+- 旧测试地图和旧小地图 Widget 示例
 
-柔边版本：
+场景主画面的战争迷雾是另一条独立功能，不作为小地图的数据入口，也不与上述小地图 GPU Buffer 耦合。
 
-```hlsl
-float Visible = 0.0;
-float EdgeWidth = 256.0;
+## GitHub Pages
 
-if (FOW_EnableSceneGpuVisionSources > 0.5)
-{
-    [loop]
-    for (int SourceIndex = 0; SourceIndex < (int)FOW_SceneGpuVisionSourceCount; ++SourceIndex)
-    {
-        float4 Source = FOW_SceneGpuVisionSourceTexture.Load(int3(SourceIndex, 0, 0));
-        float Dist = length(CurrentPixelWorldXY - Source.xy);
-        float CircleVisibility = 1.0 - smoothstep(Source.z - EdgeWidth, Source.z, Dist);
-        Visible = max(Visible, CircleVisibility);
-    }
-}
-```
+网页文档由独立 `Document` 分支根目录发布：
 
-最终混合：
-
-```hlsl
-FinalColor = lerp(FogColor, SceneColor, saturate(Visible));
-```
-
-性能要点：
-
-1. AABB / Bounds 只允许作为 CPU broad-phase 查询窗口，不能作为最终揭雾形状。
-2. 最终显示层只按圆揭雾。
-3. `CameraGroundQuadPadding` 必须不小于项目最大视野半径，否则镜头外的大视野源可能漏收。
-4. `MaxSceneGpuVisionSources` 控制材质循环上限；如果过大，GPU 像素循环会变重。
-5. 如果 GPU 循环成为瓶颈，优先减少上传圆源数量，而不是回到 CPU tile。
-
-更详细的 UE 材质节点接线和 Custom Node HLSL 见 `Docs/GPU_SCENE_FOG_MATERIAL.md`。
+<https://winyunq.github.io/FogOfWar/>

@@ -26,7 +26,6 @@ public class FogOfWar : ModuleRules
 			new string[]
 			{
 				"Core",
-				"EnhancedInput",
 				"MassAPI",
 				"MassBattle",
 				"MassCommon",
@@ -36,8 +35,7 @@ public class FogOfWar : ModuleRules
 				"MassMovement",
 				"MassRepresentation",
 				"MassSignals",
-				"MassSpawner",
-				"Niagara"
+				"MassSpawner"
 			}
 			);
 			
@@ -53,9 +51,7 @@ public class FogOfWar : ModuleRules
 				"Slate",
 				"SlateCore",
 				"MassCommon",
-				"RTSInputSystem",
 				"UMG", // Needed for UUserWidget
-				"InputCore", // Needed for EKeys
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

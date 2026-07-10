@@ -122,18 +122,6 @@ struct FOGOFWAR_API FMassStationaryTag : public FMassTag
 };
 
 /**
- * @struct FMassMinimapVisibleTag
- * @brief 标记一个实体在小地图上始终可见。
- * @details 拥有此标签的实体，其图标会无视战争迷雾的状态，始终在小地图上显示。
- * 通常用于任务目标或重要建筑。
- */
-USTRUCT()
-struct FOGOFWAR_API FMassMinimapVisibleTag : public FMassTag
-{
-	GENERATED_BODY()
-};
-
-/**
  * @struct FMassLocationChangedTag
  * @brief 标记一个实体的位置自上一帧起已发生改变。
  * @details 这是一个由Mass框架的观察器（Observer）动态添加和移除的临时标签。
@@ -223,44 +211,6 @@ struct FOGOFWAR_API FFogOfWarTeamFragment : public FMassFragment
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fog of War")
 	int32 PreviousTeamIndex = 0;
-};
-
-/**
- * @struct FMassMinimapRepresentationFragment
- * @brief 旧版小地图表现 Fragment。
- * @details 运行时小地图颜色和尺寸已改由 UMinimapWidget/UMinimapDataSubsystem 统一配置。
- */
-USTRUCT(meta = (Deprecated = "Use UMinimapWidget team display options instead."))
-struct FOGOFWAR_API FMassMinimapRepresentationFragment : public FMassFragment
-{
-    GENERATED_BODY()
-};
-
-/**
- * @struct FMinimapCellChangedTag
- * @brief [OPTIMIZATION] 标记一个实体的小地图格子坐标自上次检查后已发生改变。
- * @details 这是一个由 UMinimapObserverProcessor 动态添加和移除的临时标签。
- * 小地图数据收集器只查询带有此标签的实体，从而确保只为跨越了格子边界的单位更新数据。
- */
-USTRUCT()
-struct FOGOFWAR_API FMinimapCellChangedTag : public FMassTag
-{
-	GENERATED_BODY()
-};
-
-/**
- * @struct FMassPreviousMinimapCellFragment
- * @brief [OPTIMIZATION] 存储实体在上一帧所在的小地图格子坐标。
- * @details UMinimapObserverProcessor 使用此Fragment来检测单位是否移动到了新的小地图格子。
- */
-USTRUCT()
-struct FOGOFWAR_API FMassPreviousMinimapCellFragment : public FMassFragment
-{
-	GENERATED_BODY()
-
-	/// @brief 上一次记录的小地图格子坐标。
-	UPROPERTY()
-	FIntPoint PrevCellCoords = FIntPoint(INT_MIN, INT_MIN);
 };
 
 template<>

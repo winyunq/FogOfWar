@@ -27,17 +27,7 @@ public:
 	virtual void BuildTemplate(FMassEntityTemplateBuildContext& BuildContext, const UWorld& World) const override;
 
 protected:
-	// --- 视野属性 (Vision Properties) ---
 	/** 该单位的视野半径（用于计算战争迷雾）。设为0则不提供视野。*/
 	UPROPERTY(EditAnywhere, Category = "Vision", meta = (ClampMin = "0.0"))
 	float SightRadius = 1024.0f;
-
-	// --- 小地图标记属性 (Minimap Properties) ---
-	/** 是否让该单位进入小地图/迷雾更新链路。颜色和尺寸由 UMinimapWidget 统一配置。 */
-	UPROPERTY(EditAnywhere, Category = "Minimap")
-	bool bShouldBeRepresentedOnMinimap = true;
-
-	/** （高级）是否让该单位的图标无视战争迷雾，始终在小地图上可见？（例如任务单位）*/
-	UPROPERTY(EditAnywhere, Category = "Minimap", meta = (EditCondition = "bShouldBeRepresentedOnMinimap"))
-	bool bAlwaysVisibleOnMinimap = false;
 };
