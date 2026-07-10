@@ -10,9 +10,9 @@ namespace
 {
 	constexpr float DefaultMapRegionSizeUU = 65536.0f;
 	constexpr float DefaultVisionTileSize = 100.0f;
-	const TCHAR* MapRegionSection = TEXT("MapRegion");
+	const TCHAR* MinimapDataMapRegionSection = TEXT("MapRegion");
 
-	FString GetCleanMapName(const UWorld* World)
+	FString GetMinimapDataCleanMapName(const UWorld* World)
 	{
 		if (!World)
 		{
@@ -24,9 +24,9 @@ namespace
 		return MapName.IsEmpty() ? FString(TEXT("Default")) : MapName;
 	}
 
-	FString GetMapRegionIniPath(const UWorld* World)
+	FString GetMinimapDataMapRegionIniPath(const UWorld* World)
 	{
-		return FPaths::ProjectConfigDir() / TEXT("MapRegion") / GetCleanMapName(World) / TEXT("MapRegion.ini");
+		return FPaths::ProjectConfigDir() / TEXT("MapRegion") / GetMinimapDataCleanMapName(World) / TEXT("MapRegion.ini");
 	}
 
 	void ReadMapRegionIni(const UWorld* World, FVector2D& OutGridOrigin, FVector2D& OutGridSize)
@@ -35,16 +35,16 @@ namespace
 		OutGridSize = FVector2D(DefaultMapRegionSizeUU, DefaultMapRegionSizeUU);
 
 		FConfigFile IniFile;
-		IniFile.Read(GetMapRegionIniPath(World));
+		IniFile.Read(GetMinimapDataMapRegionIniPath(World));
 
 		float OriginX = OutGridOrigin.X;
 		float OriginY = OutGridOrigin.Y;
 		float SizeX = OutGridSize.X;
 		float SizeY = OutGridSize.Y;
-		IniFile.GetFloat(MapRegionSection, TEXT("OriginX"), OriginX);
-		IniFile.GetFloat(MapRegionSection, TEXT("OriginY"), OriginY);
-		IniFile.GetFloat(MapRegionSection, TEXT("SizeX"), SizeX);
-		IniFile.GetFloat(MapRegionSection, TEXT("SizeY"), SizeY);
+		IniFile.GetFloat(MinimapDataMapRegionSection, TEXT("OriginX"), OriginX);
+		IniFile.GetFloat(MinimapDataMapRegionSection, TEXT("OriginY"), OriginY);
+		IniFile.GetFloat(MinimapDataMapRegionSection, TEXT("SizeX"), SizeX);
+		IniFile.GetFloat(MinimapDataMapRegionSection, TEXT("SizeY"), SizeY);
 
 		if (SizeX > 0.0f && SizeY > 0.0f)
 		{

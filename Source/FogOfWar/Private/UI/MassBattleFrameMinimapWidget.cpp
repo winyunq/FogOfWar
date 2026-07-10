@@ -19,7 +19,7 @@ namespace
 {
 	constexpr float FallbackMapSizeUU = 65536.0f;
 	constexpr int32 TeamIdLookupSize = 1 << 10;
-	const TCHAR* MapRegionSection = TEXT("MapRegion");
+	const TCHAR* MassBattleMinimapMapRegionSection = TEXT("MapRegion");
 	const TCHAR* MinimapColorSection = TEXT("MinimapUnitColors");
 
 	FString GetMapName(const UWorld* World)
@@ -304,10 +304,10 @@ bool UMassBattleFrameMinimapWidget::ResolveMapRegion()
 	float OriginY = -FallbackMapSizeUU * 0.5f;
 	float SizeX = FallbackMapSizeUU;
 	float SizeY = FallbackMapSizeUU;
-	Config.GetFloat(MapRegionSection, TEXT("OriginX"), OriginX);
-	Config.GetFloat(MapRegionSection, TEXT("OriginY"), OriginY);
-	Config.GetFloat(MapRegionSection, TEXT("SizeX"), SizeX);
-	Config.GetFloat(MapRegionSection, TEXT("SizeY"), SizeY);
+	Config.GetFloat(MassBattleMinimapMapRegionSection, TEXT("OriginX"), OriginX);
+	Config.GetFloat(MassBattleMinimapMapRegionSection, TEXT("OriginY"), OriginY);
+	Config.GetFloat(MassBattleMinimapMapRegionSection, TEXT("SizeX"), SizeX);
+	Config.GetFloat(MassBattleMinimapMapRegionSection, TEXT("SizeY"), SizeY);
 
 	MapRegionTransform = FTransform(FRotator::ZeroRotator, FVector(OriginX + SizeX * 0.5f, OriginY + SizeY * 0.5f, 0.0f));
 	MapWorldSize = FVector2D(FMath::Max(1.0f, SizeX), FMath::Max(1.0f, SizeY));

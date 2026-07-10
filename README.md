@@ -171,6 +171,59 @@ Source/FogOfWar/Private/Minimap/MapRegion.cpp
 
 场景主画面的战争迷雾是另一条独立功能，不作为小地图的数据入口，也不与上述小地图 GPU Buffer 耦合。
 
+## MassBattleFrame 场景战争迷雾
+
+新增原生 Actor：
+
+```text
+AMassBattleFrameFogOfWar
+```
+
+这是一个独立的 `AActor`，不继承 `AFogOfWar`，不使用旧后处理源列表，也不修改 MassBattleFrame 源码。Actor 只负责创建和配置 Niagara；视野数据由 Niagara/NDC 路径在 GPU 侧消费。
+
+```text
+现成 NDC / Niagara 输入
+  -> GPU 视野点按半径绘制成圆
+  -> GPU 取反
+  -> 世界空间 Fog Mesh / Decal
+```
+
+### 可调参数
+
+| 参数 | 默认值 | 作用 |
+| :-- | --: | :-- |
+| `FogNiagaraSystem` | 无 | 新的世界空间战争迷雾 Niagara 系统；未配置时直接禁用，不回退 CPU。 |
+| `VisionDataChannel` | 无 | 现成视野 NDC 输入，可由 Niagara User 参数读取。 |
+| `TemporaryVisionRadius` | `1024 cm` | 当前临时默认视野半径；后续接入单位独立半径时替换。 |
+| `ViewingTeamIndex` | `0` | GPU 侧参与揭雾的队伍。 |
+| `FogOpacity` | `0.85` | 不可见世界空间 Fog 的不透明度。 |
+| `bFogDebug` | `false` | Niagara 调试显示开关。 |
+| `FogUpdateRateHz` | `0` | `0` 表示不锁帧、每个引擎 Tick 更新；大于 `0` 时按指定频率更新。 |
+| `bAutoActivate` | `true` | BeginPlay 自动启用 Niagara Fog。 |
+
+Niagara User 参数契约：
+
+```text
+User.FogVisionDataChannel
+User.FogVisionRadius
+User.FogViewingTeam
+User.FogOpacity
+User.FogDebug
+User.FogUpdateRateHz
+User.FogEnabled
+```
+
+### 性能接口
+
+```text
+GetLastMassBattleFrameFogPerfStats()
+[FogOfWarPerf][MassBattleFrameFog]
+```
+
+当前接口记录 Niagara 参数推送耗时和 Niagara 路径是否激活。GPU 视野绘制时间应使用 Niagara/GPU profiler 统计；FogOfWar 不引入单位级 CPU 统计。
+
+未配置 `FogNiagaraSystem` 时只记录错误并禁用功能，不执行 CPU fallback。
+
 ## GitHub Pages
 
 网页文档由独立 `Document` 分支根目录发布：

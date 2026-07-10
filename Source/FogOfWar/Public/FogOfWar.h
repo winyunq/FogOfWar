@@ -126,7 +126,7 @@ public:
 	void Initialize();
 
 	/** 更新场景后处理专用的 Mass 视野源纹理。 */
-	void UpdateSceneGpuVisionSourceTexture();
+	virtual void UpdateSceneGpuVisionSourceTexture();
 	//~ End Core Logic Functions
 
 public:

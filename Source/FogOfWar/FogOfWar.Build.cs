@@ -52,6 +52,7 @@ public class FogOfWar : ModuleRules
 				"SlateCore",
 				"MassCommon",
 				"UMG", // Needed for UUserWidget
+				"Niagara",
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);
