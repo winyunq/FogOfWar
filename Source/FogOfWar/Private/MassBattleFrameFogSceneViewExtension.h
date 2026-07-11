@@ -16,6 +16,7 @@ struct FMassBattleFrameFogSceneUploadData
 	uint32 ViewingTeamIndex = 0;
 	bool bEnabled = false;
 	bool bDebug = false;
+	bool bDebugRevealAll = false;
 };
 
 /**
@@ -61,4 +62,5 @@ private:
 	bool bEnabled_GameThread = false;
 	bool bEnabled_RenderThread = false;
 	bool bDebug_RenderThread = false;
+	bool bDebugRevealAll_RenderThread = false;
 };

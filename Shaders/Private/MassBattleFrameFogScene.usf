@@ -6,6 +6,7 @@ Buffer<float4> DynamicParams0;
 Buffer<uint> IsHidden;
 float VisionRadiusUU;
 uint ViewingTeamIndex;
+uint DebugRevealAll;
 float2 OutputExtent;
 float2 ViewRectMin;
 float2 ViewRectSize;
@@ -55,7 +56,7 @@ FVisionVSToPS VisionVS(uint VertexID : SV_VertexID, uint InstanceID : SV_Instanc
 	FVisionVSToPS Output;
 	ResolvedView = ResolveView();
 	const uint TeamID = asuint(DynamicParams0[InstanceID].w) & 1023u;
-	const bool bValid = IsHidden[InstanceID] == 0u && TeamID == ViewingTeamIndex;
+	const bool bValid = DebugRevealAll != 0u || (IsHidden[InstanceID] == 0u && TeamID == ViewingTeamIndex);
 	const float3 Center = LoadWorldPosition(InstanceID);
 	const float2 Offset = (QuadCorners[VertexID] - 0.5) * (2.0 * VisionRadiusUU);
 	const float3 WorldPosition = Center + float3(Offset, 0.0);

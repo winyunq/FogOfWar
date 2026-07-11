@@ -209,6 +209,7 @@ MassBattleFrame SpawnedRenderBatches
 | `ViewingTeamIndex` | `0` | GPU 侧参与揭雾的队伍。 |
 | `FogOpacity` | `0.85` | 不可见场景区域的暗化强度。 |
 | `bFogDebug` | `false` | 是否直接显示 GPU 可见性遮罩（白=已揭示，黑=战争迷雾）。 |
+| `bDebugRevealAll` | `false` | Debug 开关；开启后所有已上传单位都揭开视野，绕过 Team 和 `IsHidden` 过滤，仅用于排查数据。 |
 | `FogUpdateRateHz` | `0` | `0` 表示不锁帧、每个引擎 Tick 更新；大于 `0` 时按指定频率更新。 |
 | `bAutoActivate` | `true` | BeginPlay 自动启用场景 GPU 战争迷雾。 |
 

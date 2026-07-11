@@ -29,6 +29,7 @@ namespace
 			SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
 			SHADER_PARAMETER(float, VisionRadiusUU)
 			SHADER_PARAMETER(uint32, ViewingTeamIndex)
+			SHADER_PARAMETER(uint32, DebugRevealAll)
 			SHADER_PARAMETER_SRV(Buffer<uint>, LocationWords)
 			SHADER_PARAMETER_SRV(Buffer<float4>, DynamicParams0)
 			SHADER_PARAMETER_SRV(Buffer<uint>, IsHidden)
@@ -233,6 +234,7 @@ void FMassBattleFrameFogSceneViewExtension::Upload_RenderThread(
 	ViewingTeamIndex_RenderThread = FMath::Min(UploadData.ViewingTeamIndex, 1023u);
 	bEnabled_RenderThread = UploadData.bEnabled;
 	bDebug_RenderThread = UploadData.bDebug;
+	bDebugRevealAll_RenderThread = UploadData.bDebugRevealAll;
 }
 
 void FMassBattleFrameFogSceneViewExtension::Release_RenderThread()
@@ -314,6 +316,7 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 		VisionVS.View = View.ViewUniformBuffer;
 		VisionVS.VisionRadiusUU = VisionRadiusUU_RenderThread;
 		VisionVS.ViewingTeamIndex = ViewingTeamIndex_RenderThread;
+		VisionVS.DebugRevealAll = bDebugRevealAll_RenderThread ? 1u : 0u;
 		VisionVS.LocationWords = LocationWordsBuffer.SRV;
 		VisionVS.DynamicParams0 = DynamicParams0Buffer.SRV;
 		VisionVS.IsHidden = IsHiddenBuffer.SRV;

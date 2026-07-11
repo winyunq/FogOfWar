@@ -78,6 +78,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
 	void SetFogDebug(bool bInDebug);
 
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame|Debug")
+	void SetDebugRevealAll(bool bInRevealAll);
+
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -94,6 +97,10 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters")
 	bool bFogDebug = false;
+
+	/** Debug-only override: every uploaded unit reveals the scene, ignoring team and hidden filters. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Debug")
+	bool bDebugRevealAll = false;
 
 	/** 0 means update every engine tick; positive values explicitly cap the GPU data update rate. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "Hz"))

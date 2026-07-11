@@ -166,6 +166,7 @@ void AMassBattleFrameFogOfWar::SetMassBattleFrameFogArrays()
 		SceneUpload.ViewingTeamIndex = static_cast<uint32>(FMath::Clamp(ViewingTeamIndex, 0, 1023));
 		SceneUpload.bEnabled = bFogActive;
 		SceneUpload.bDebug = bFogDebug;
+		SceneUpload.bDebugRevealAll = bDebugRevealAll;
 		SceneViewExtension->Upload_GameThread(MoveTemp(SceneUpload));
 	}
 
@@ -193,5 +194,11 @@ void AMassBattleFrameFogOfWar::SetFogOpacity(const float InOpacity)
 void AMassBattleFrameFogOfWar::SetFogDebug(const bool bInDebug)
 {
 	bFogDebug = bInDebug;
+	PushMassBattleFrameFogParameters();
+}
+
+void AMassBattleFrameFogOfWar::SetDebugRevealAll(const bool bInRevealAll)
+{
+	bDebugRevealAll = bInRevealAll;
 	PushMassBattleFrameFogParameters();
 }
