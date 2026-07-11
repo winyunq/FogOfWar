@@ -181,6 +181,14 @@ Source/FogOfWar/Private/Minimap/MapRegion.cpp
 AMassBattleFrameFogOfWar
 ```
 
+一键放置资产：
+
+```text
+Content/Core/BP_MassBattleFrameFogOfWar.uasset
+```
+
+该 Blueprint 仅继承 `AMassBattleFrameFogOfWar`，没有 Niagara、材质或网格依赖；拖入关卡后使用 C++ 默认参数即可运行。原有的 `Content/Core/MassBattleFogOfWar.uasset` 仍属于旧 `AFogOfWar` 路径，不是本功能的默认资产。
+
 这是一个独立的 `AActor`，不继承 `AFogOfWar`，不使用旧后处理源列表，也不修改 MassBattleFrame 源码。Actor 直接读取 `UMassBattleSubsystem` 已经维护的 `AgentRenderers -> SpawnedRenderBatches`，按 batch 整块转发位置、队伍和隐藏状态；不会查询 Mass Entity、遍历单位、访问 HashGrid 或重新投影数据。
 
 ```text
