@@ -231,6 +231,19 @@ MassBattleFrameFog Composite
 
 Actor 拖入场景后无需手动指定任何资产；C++ 会自动注册 SceneView GPU pass，不执行 CPU fallback。
 
+### 9944 单位实测
+
+测试地图为 `/Game/Map/EastAsia/64`，Win64 Development、D3D12，`FogUpdateRateHz=0`。日志确认本次场景战争迷雾实际收到全部 `9944` 个来源、`24` 个 batch，并且 `SceneGPU=yes`；不是只测试了 728 个单位，也不是空数据路径。
+
+| 指标 | 实测结果 | 说明 |
+| :-- | --: | :-- |
+| Fog `ParameterPush` | 平均 `0.158 ms`，最大 `0.279 ms` | 场景 Fog Actor 单次参数推送。 |
+| Fog `ArrayUpload` | 平均 `0.157 ms`，最大 `0.278 ms` | batch 数组合并和提交 GPU buffer 的 CPU 侧耗时。 |
+| Mass 来源 | `9944` sources / `24` batches | 全部来源进入场景 GPU 视野 pass；Team 和 `IsHidden` 在 GPU 过滤。 |
+| 数据量 | `424088 bytes` | 同一批 9944 单位的小地图日志记录的三组来源数组及颜色表上传量。 |
+
+同一批 9944 单位的小地图 GPU 参考采样为：Units `0.061 ms`、Vision `0.081 ms`、Fog `0.006 ms`、Total `0.189 ms`（3 个样本平均）。这组数值是小地图 GPU pass 的参考，不冒充场景 Fog 的 GPU 时间；场景 Fog 的确切 GPU 时间应在 profiler 中查看 `MassBattleFrameFog Vision Mask` 和 `MassBattleFrameFog Composite`。
+
 ## GitHub Pages
 
 网页文档由独立 `Document` 分支根目录发布：
