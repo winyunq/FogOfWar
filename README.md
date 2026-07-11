@@ -244,6 +244,25 @@ Actor 拖入场景后无需手动指定任何资产；C++ 会自动注册 SceneV
 
 同一批 9944 单位的小地图 GPU 参考采样为：Units `0.061 ms`、Vision `0.081 ms`、Fog `0.006 ms`、Total `0.189 ms`（3 个样本平均）。这组数值是小地图 GPU pass 的参考，不冒充场景 Fog 的 GPU 时间；场景 Fog 的确切 GPU 时间应在 profiler 中查看 `MassBattleFrameFog Vision Mask` 和 `MassBattleFrameFog Composite`。
 
+### 数量—开销曲线脚本
+
+使用以下脚本从任意 UE 日志重新生成曲线、CSV 和摘要：
+
+```text
+Scripts/AnalyzeMassBattleFrameFogPerf.py
+python Scripts/AnalyzeMassBattleFrameFogPerf.py --log <Project>/Saved/Logs/Winyunq.log
+```
+
+输出目录为 `Docs/Performance/`：
+
+```text
+MassBattleFrameFogPerfCurve.png
+MassBattleFrameFogPerfCurve.csv
+MassBattleFrameFogPerfSummary.txt
+```
+
+当前刷兵日志已经提取出 `16、2689、5350、8021、10687、13356、16027、18691、21366、24032、26686、29352` 个来源点，共 42 条 Fog CPU 记录。曲线显示数组推送开销总体随来源数近似线性上升，约为 `0.0105 μs/source` 的最小二乘斜率；当前最大观测值为 `29352` 来源时 `0.385 ms`，中间 `24032` 来源处出现一次 `0.421 ms` 峰值。当前日志只有一个小地图 GPU 采样数量点，因此脚本不会伪造 GPU 曲线；场景 Fog GPU 仍需用 profiler pass 采样。
+
 ## GitHub Pages
 
 网页文档由独立 `Document` 分支根目录发布：
