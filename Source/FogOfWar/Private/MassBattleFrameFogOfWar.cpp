@@ -1,13 +1,14 @@
 // Copyright Winyunq, 2025. All Rights Reserved.
 
 #include "MassBattleFrameFogOfWar.h"
+#include "MassBattleFrameFogSceneViewExtension.h"
 
 #include "Components/SceneComponent.h"
 #include "HAL/PlatformTime.h"
-#include "NiagaraComponent.h"
-#include "NiagaraDataChannel.h"
-#include "NiagaraFunctionLibrary.h"
-#include "NiagaraSystem.h"
+#include "Fragments/RenderBatchData.h"
+#include "SceneViewExtension.h"
+#include "Renderers/MassBattleAgentRenderer.h"
+#include "Subsystems/MassBattleSubsystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMassBattleFrameFog, Log, All);
 
@@ -58,25 +59,16 @@ bool AMassBattleFrameFogOfWar::ActivateMassBattleFrameFog()
 {
 	if (bFogActive)
 	{
-		return IsValid(FogNiagaraComponent);
+		return SceneViewExtension.IsValid();
 	}
 
-	if (!IsValid(FogNiagaraSystem))
+	SceneViewExtension = FSceneViewExtensions::NewExtension<FMassBattleFrameFogSceneViewExtension>();
+	if (!SceneViewExtension.IsValid())
 	{
-		UE_LOG(LogMassBattleFrameFog, Error, TEXT("AMassBattleFrameFogOfWar requires FogNiagaraSystem; CPU fallback is intentionally disabled."));
+		UE_LOG(LogMassBattleFrameFog, Error, TEXT("Could not register the MassBattleFrame scene fog view extension."));
 		return false;
 	}
 
-	FogNiagaraComponent = NewObject<UNiagaraComponent>(this, TEXT("FogNiagaraComponent"));
-	if (!FogNiagaraComponent)
-	{
-		return false;
-	}
-
-	FogNiagaraComponent->SetupAttachment(SceneRoot);
-	FogNiagaraComponent->SetAsset(FogNiagaraSystem);
-	FogNiagaraComponent->RegisterComponent();
-	FogNiagaraComponent->Activate(true);
 	bFogActive = true;
 	PrimaryActorTick.SetTickFunctionEnable(true);
 	PushMassBattleFrameFogParameters();
@@ -88,34 +80,37 @@ void AMassBattleFrameFogOfWar::DeactivateMassBattleFrameFog()
 	bFogActive = false;
 	PrimaryActorTick.SetTickFunctionEnable(false);
 
-	if (IsValid(FogNiagaraComponent))
+	if (SceneViewExtension.IsValid())
 	{
-		FogNiagaraComponent->Deactivate();
-		FogNiagaraComponent->DestroyComponent();
+		SceneViewExtension->Release_GameThread();
+		SceneViewExtension.Reset();
 	}
-	FogNiagaraComponent = nullptr;
 }
 
 void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 {
-	if (!bFogActive || !IsValid(FogNiagaraComponent))
+	if (!bFogActive)
 	{
 		return;
 	}
 
 	const double StartSeconds = FPlatformTime::Seconds();
-	SetNiagaraParameters();
+	SetMassBattleFrameFogArrays();
 	LastParameterPushTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 
 	LastPerfStats.ParameterPushMs = static_cast<float>((FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 	LastPerfStats.ParameterPushCount++;
-	LastPerfStats.bNiagaraPathActive = true;
+	LastPerfStats.bSceneGpuPathActive = SceneViewExtension.IsValid();
 
 	if (bEnablePerformanceStats && bLogPerformanceToOutputLog && GetWorld() && GetWorld()->GetTimeSeconds() - LastPerformanceLogTime >= PerformanceLogInterval)
 	{
 		UE_LOG(LogMassBattleFrameFog, Log,
-			TEXT("[FogOfWarPerf][MassBattleFrameFog] NiagaraParameterPush=%.3fms UpdateRateHz=%.3f Radius=%.1f Team=%d"),
+			TEXT("[FogOfWarPerf][MassBattleFrameFog] ParameterPush=%.3fms ArrayUpload=%.3fms Sources=%d Batches=%d SceneGPU=%s UpdateRateHz=%.3f Radius=%.1f Team=%d"),
 			LastPerfStats.ParameterPushMs,
+			LastPerfStats.ArrayUploadMs,
+			LastPerfStats.SourceCount,
+			LastPerfStats.BatchCount,
+			LastPerfStats.bSceneGpuPathActive ? TEXT("yes") : TEXT("no"),
 			FogUpdateRateHz,
 			TemporaryVisionRadius,
 			ViewingTeamIndex);
@@ -123,19 +118,58 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 	}
 }
 
-void AMassBattleFrameFogOfWar::SetNiagaraParameters()
+void AMassBattleFrameFogOfWar::SetMassBattleFrameFogArrays()
 {
-	FogNiagaraComponent->SetVariableFloat(VisionRadiusParameter, FMath::Max(0.0f, TemporaryVisionRadius));
-	FogNiagaraComponent->SetVariableInt(ViewingTeamParameter, FMath::Clamp(ViewingTeamIndex, 0, 1023));
-	FogNiagaraComponent->SetVariableFloat(FogOpacityParameter, FMath::Clamp(FogOpacity, 0.0f, 1.0f));
-	FogNiagaraComponent->SetVariableBool(FogDebugParameter, bFogDebug);
-	FogNiagaraComponent->SetVariableFloat(FogUpdateRateParameter, FMath::Max(0.0f, FogUpdateRateHz));
-	FogNiagaraComponent->SetVariableBool(FogEnabledParameter, bFogActive);
+	const double StartSeconds = FPlatformTime::Seconds();
+	LastPerfStats.SourceCount = 0;
+	LastPerfStats.BatchCount = 0;
 
-	if (IsValid(VisionDataChannel))
+	UWorld* World = GetWorld();
+	UMassBattleSubsystem* MassBattleSubsystem = World ? World->GetSubsystem<UMassBattleSubsystem>() : nullptr;
+
+	// Copy the already-contiguous Mass Battle Frame arrays in batch blocks.
+	// There is no entity query, per-agent branch, projection, or HashGrid walk here.
+	TArray<FVector> Locations;
+	TArray<FVector4f> DynamicParams;
+	TArray<bool> IsHidden;
+
+	if (MassBattleSubsystem)
 	{
-		FogNiagaraComponent->SetVariableObject(VisionDataChannelParameter, VisionDataChannel);
+		for (const TPair<int32, TObjectPtr<AMassBattleAgentRenderer>>& RendererPair : MassBattleSubsystem->AgentRenderers)
+		{
+			const AMassBattleAgentRenderer* Renderer = RendererPair.Value;
+			if (!IsValid(Renderer))
+			{
+				continue;
+			}
+
+			for (const TPair<int32, FAgentRenderBatchData>& BatchPair : Renderer->SpawnedRenderBatches)
+			{
+				const FAgentRenderBatchData& Batch = BatchPair.Value;
+				Locations.Append(Batch.LocationArray);
+				DynamicParams.Append(Batch.DynamicParams0_Array);
+				IsHidden.Append(Batch.IsHiddenArray);
+				++LastPerfStats.BatchCount;
+			}
+		}
 	}
+
+	LastPerfStats.SourceCount = Locations.Num();
+	if (SceneViewExtension.IsValid())
+	{
+		FMassBattleFrameFogSceneUploadData SceneUpload;
+		SceneUpload.Locations = Locations;
+		SceneUpload.DynamicParams0 = DynamicParams;
+		SceneUpload.IsHidden = IsHidden;
+		SceneUpload.VisionRadiusUU = FMath::Max(0.0f, TemporaryVisionRadius);
+		SceneUpload.FogOpacity = FMath::Clamp(FogOpacity, 0.0f, 1.0f);
+		SceneUpload.ViewingTeamIndex = static_cast<uint32>(FMath::Clamp(ViewingTeamIndex, 0, 1023));
+		SceneUpload.bEnabled = bFogActive;
+		SceneUpload.bDebug = bFogDebug;
+		SceneViewExtension->Upload_GameThread(MoveTemp(SceneUpload));
+	}
+
+	LastPerfStats.ArrayUploadMs = static_cast<float>((FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 }
 
 void AMassBattleFrameFogOfWar::SetTemporaryVisionRadius(const float InRadius)

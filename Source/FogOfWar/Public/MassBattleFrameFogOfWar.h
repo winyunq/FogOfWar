@@ -6,9 +6,7 @@
 #include "GameFramework/Actor.h"
 #include "MassBattleFrameFogOfWar.generated.h"
 
-class UNiagaraComponent;
-class UNiagaraDataChannelAsset;
-class UNiagaraSystem;
+class FMassBattleFrameFogSceneViewExtension;
 
 USTRUCT(BlueprintType)
 struct FOGOFWAR_API FMassBattleFrameFogPerfStats
@@ -19,18 +17,27 @@ struct FOGOFWAR_API FMassBattleFrameFogPerfStats
 	float ParameterPushMs = 0.0f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame Performance")
+	float ArrayUploadMs = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame Performance")
+	int32 SourceCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame Performance")
+	int32 BatchCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame Performance")
 	int32 ParameterPushCount = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame Performance")
-	bool bNiagaraPathActive = false;
+	bool bSceneGpuPathActive = false;
 };
 
 /**
- * Standalone MassBattleFrame Niagara fog controller.
+ * Standalone MassBattleFrame scene fog controller.
  *
- * The Niagara system is responsible for consuming the existing GPU-facing
- * input, drawing the vision circles, and producing the inverse world-space
- * fog. This actor never traverses Mass entities or MassBattle render batches.
+ * The actor consumes the existing MassBattleFrame render-batch arrays. The
+ * scene result is produced by a scene-view GPU pass that borrows the
+ * minimap's instanced circle rasterization and inverse composite.
  */
 UCLASS(BlueprintType, Blueprintable, meta = (DisplayName = "Mass Battle Frame Fog Of War"))
 class FOGOFWAR_API AMassBattleFrameFogOfWar : public AActor
@@ -75,35 +82,6 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame")
 	TObjectPtr<USceneComponent> SceneRoot;
 
-	/** New Niagara system that reads the existing vision NDC/input and renders world-space fog. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	TObjectPtr<UNiagaraSystem> FogNiagaraSystem;
-
-	/** Optional existing NDC asset passed to the Niagara system through User.FogVisionDataChannel. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	TObjectPtr<UNiagaraDataChannelAsset> VisionDataChannel;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName VisionDataChannelParameter = TEXT("User.FogVisionDataChannel");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName VisionRadiusParameter = TEXT("User.FogVisionRadius");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName ViewingTeamParameter = TEXT("User.FogViewingTeam");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName FogOpacityParameter = TEXT("User.FogOpacity");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName FogDebugParameter = TEXT("User.FogDebug");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName FogUpdateRateParameter = TEXT("User.FogUpdateRateHz");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Niagara")
-	FName FogEnabledParameter = TEXT("User.FogEnabled");
-
 	/** Temporary/default radius until a per-agent fog-radius attribute is introduced. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm"))
 	float TemporaryVisionRadius = 1024.0f;
@@ -117,7 +95,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters")
 	bool bFogDebug = false;
 
-	/** 0 means update every engine tick; positive values explicitly cap the Niagara update rate. */
+	/** 0 means update every engine tick; positive values explicitly cap the GPU data update rate. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "Hz"))
 	float FogUpdateRateHz = 0.0f;
 
@@ -137,10 +115,9 @@ protected:
 	FMassBattleFrameFogPerfStats LastPerfStats;
 
 private:
-	void SetNiagaraParameters();
+	void SetMassBattleFrameFogArrays();
 
-	UPROPERTY(Transient)
-	TObjectPtr<UNiagaraComponent> FogNiagaraComponent;
+	TSharedPtr<FMassBattleFrameFogSceneViewExtension, ESPMode::ThreadSafe> SceneViewExtension;
 
 	bool bFogActive = false;
 	double LastParameterPushTime = -TNumericLimits<double>::Max();

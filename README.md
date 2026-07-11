@@ -173,45 +173,36 @@ Source/FogOfWar/Private/Minimap/MapRegion.cpp
 
 ## MassBattleFrame 场景战争迷雾
 
+先明确一个设计纠正：Niagara 只能作为视野圆形的 GPU 光栅化器，不能凭空把已经渲染完成的 `SceneColor` 反相变暗；真正的战争迷雾必须有一个最终合成步骤。因此本实现不再把 Niagara 当作场景输出，而是直接使用独立 SceneView GPU pass 完成“视野遮罩 + SceneColor 合成”。
+
 新增原生 Actor：
 
 ```text
 AMassBattleFrameFogOfWar
 ```
 
-这是一个独立的 `AActor`，不继承 `AFogOfWar`，不使用旧后处理源列表，也不修改 MassBattleFrame 源码。Actor 只负责创建和配置 Niagara；视野数据由 Niagara/NDC 路径在 GPU 侧消费。
+这是一个独立的 `AActor`，不继承 `AFogOfWar`，不使用旧后处理源列表，也不修改 MassBattleFrame 源码。Actor 直接读取 `UMassBattleSubsystem` 已经维护的 `AgentRenderers -> SpawnedRenderBatches`，按 batch 整块转发位置、队伍和隐藏状态；不会查询 Mass Entity、遍历单位、访问 HashGrid 或重新投影数据。
 
 ```text
-现成 NDC / Niagara 输入
-  -> GPU 视野点按半径绘制成圆
-  -> GPU 取反
-  -> 世界空间 Fog Mesh / Decal
+MassBattleFrame SpawnedRenderBatches
+  -> GPU-facing Location / DynamicParams0 / IsHidden buffers
+  -> SceneView GPU pass: 每个视野源实例化一个世界半径圆形
+  -> R8 VisibilityMask（ViewingTeamIndex + IsHidden 在 GPU 过滤）
+  -> 一次 SceneColor 合成：SceneColor × FogFactor
 ```
+
+最终场景输出由独立 SceneView GPU pass 完成；`bFogDebug=true` 时直接把 GPU 可见性遮罩输出到场景，便于确认圆形视野和队伍过滤。Actor 拖入关卡后不需要 Niagara、材质、网格、SceneCapture、RenderTarget 或手工绑定后处理材质。
 
 ### 可调参数
 
 | 参数 | 默认值 | 作用 |
 | :-- | --: | :-- |
-| `FogNiagaraSystem` | 无 | 新的世界空间战争迷雾 Niagara 系统；未配置时直接禁用，不回退 CPU。 |
-| `VisionDataChannel` | 无 | 现成视野 NDC 输入，可由 Niagara User 参数读取。 |
 | `TemporaryVisionRadius` | `1024 cm` | 当前临时默认视野半径；后续接入单位独立半径时替换。 |
 | `ViewingTeamIndex` | `0` | GPU 侧参与揭雾的队伍。 |
-| `FogOpacity` | `0.85` | 不可见世界空间 Fog 的不透明度。 |
-| `bFogDebug` | `false` | Niagara 调试显示开关。 |
+| `FogOpacity` | `0.85` | 不可见场景区域的暗化强度。 |
+| `bFogDebug` | `false` | 是否直接显示 GPU 可见性遮罩（白=已揭示，黑=战争迷雾）。 |
 | `FogUpdateRateHz` | `0` | `0` 表示不锁帧、每个引擎 Tick 更新；大于 `0` 时按指定频率更新。 |
-| `bAutoActivate` | `true` | BeginPlay 自动启用 Niagara Fog。 |
-
-Niagara User 参数契约：
-
-```text
-User.FogVisionDataChannel
-User.FogVisionRadius
-User.FogViewingTeam
-User.FogOpacity
-User.FogDebug
-User.FogUpdateRateHz
-User.FogEnabled
-```
+| `bAutoActivate` | `true` | BeginPlay 自动启用场景 GPU 战争迷雾。 |
 
 ### 性能接口
 
@@ -220,9 +211,16 @@ GetLastMassBattleFrameFogPerfStats()
 [FogOfWarPerf][MassBattleFrameFog]
 ```
 
-当前接口记录 Niagara 参数推送耗时和 Niagara 路径是否激活。GPU 视野绘制时间应使用 Niagara/GPU profiler 统计；FogOfWar 不引入单位级 CPU 统计。
+当前接口记录参数推送、批量数组上传、来源数量、batch 数量，以及 Scene GPU 路径状态。RenderDoc/Unreal GPU profiler 中可直接查看：
 
-未配置 `FogNiagaraSystem` 时只记录错误并禁用功能，不执行 CPU fallback。
+```text
+MassBattleFrameFog Vision Mask
+MassBattleFrameFog Composite
+```
+
+这两个 GPU pass 的复杂度是 `O(可见性源实例数 + 当前视图像素数)`，不是 `O(单位数 × 屏幕像素数)`；CPU 侧只有 batch 级 `Append` 和 GPU buffer 更新，不执行单位级 fallback。
+
+Actor 拖入场景后无需手动指定任何资产；C++ 会自动注册 SceneView GPU pass，不执行 CPU fallback。
 
 ## GitHub Pages
 

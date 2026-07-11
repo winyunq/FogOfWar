@@ -1,0 +1,100 @@
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/Common.ush"
+
+Buffer<uint> LocationWords;
+Buffer<float4> DynamicParams0;
+Buffer<uint> IsHidden;
+float VisionRadiusUU;
+uint ViewingTeamIndex;
+float2 OutputExtent;
+float2 ViewRectMin;
+float2 ViewRectSize;
+float FogOpacity;
+uint Debug;
+Texture2D SceneColor;
+Texture2D VisibilityMask;
+SamplerState LinearSampler;
+
+static const float2 QuadCorners[6] =
+{
+	float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
+	float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0)
+};
+
+float DoubleWordsToFloat(uint LowWord, uint HighWord)
+{
+	const uint Exponent = (HighWord >> 20u) & 0x7ffu;
+	if (Exponent == 0u)
+	{
+		return 0.0;
+	}
+	const float Sign = (HighWord & 0x80000000u) != 0u ? -1.0 : 1.0;
+	const float Mantissa = 1.0
+		+ float(HighWord & 0x000fffffu) * (1.0 / 1048576.0)
+		+ float(LowWord) * (1.0 / 4503599627370496.0);
+	return Sign * exp2(float(int(Exponent) - 1023)) * Mantissa;
+}
+
+float3 LoadWorldPosition(uint AgentIndex)
+{
+	const uint WordOffset = AgentIndex * 6u;
+	return float3(
+		DoubleWordsToFloat(LocationWords[WordOffset + 0u], LocationWords[WordOffset + 1u]),
+		DoubleWordsToFloat(LocationWords[WordOffset + 2u], LocationWords[WordOffset + 3u]),
+		DoubleWordsToFloat(LocationWords[WordOffset + 4u], LocationWords[WordOffset + 5u]));
+}
+
+struct FVisionVSToPS
+{
+	float4 Position : SV_Position;
+	float2 CircleUV : TEXCOORD0;
+};
+
+FVisionVSToPS VisionVS(uint VertexID : SV_VertexID, uint InstanceID : SV_InstanceID)
+{
+	FVisionVSToPS Output;
+	ResolvedView = ResolveView();
+	const uint TeamID = asuint(DynamicParams0[InstanceID].w) & 1023u;
+	const bool bValid = IsHidden[InstanceID] == 0u && TeamID == ViewingTeamIndex;
+	const float3 Center = LoadWorldPosition(InstanceID);
+	const float2 Offset = (QuadCorners[VertexID] - 0.5) * (2.0 * VisionRadiusUU);
+	const float3 WorldPosition = Center + float3(Offset, 0.0);
+	Output.Position = bValid
+		? mul(float4(DFFastToTranslatedWorld(WorldPosition, ResolvedView.PreViewTranslation), 1.0), ResolvedView.TranslatedWorldToClip)
+		: float4(-2.0, -2.0, 0.0, 1.0);
+	Output.CircleUV = QuadCorners[VertexID] * 2.0 - 1.0;
+	return Output;
+}
+
+float4 VisionPS(FVisionVSToPS Input) : SV_Target0
+{
+	clip(1.0 - dot(Input.CircleUV, Input.CircleUV));
+	return 1.0.xxxx;
+}
+
+struct FCompositeVSToPS
+{
+	float4 Position : SV_Position;
+	float2 UV : TEXCOORD0;
+};
+
+FCompositeVSToPS CompositeVS(uint VertexID : SV_VertexID)
+{
+	FCompositeVSToPS Output;
+	const float2 Pixel = ViewRectMin + QuadCorners[VertexID] * ViewRectSize;
+	Output.Position = float4(Pixel / OutputExtent * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+	Output.UV = Pixel / OutputExtent;
+	return Output;
+}
+
+float4 CompositePS(FCompositeVSToPS Input) : SV_Target0
+{
+	const float4 Scene = SceneColor.Sample(LinearSampler, Input.UV);
+	const float Visibility = VisibilityMask.Sample(LinearSampler, Input.UV).r;
+	if (Debug != 0u)
+	{
+		return float4(Visibility.xxx, 1.0);
+	}
+	const float3 Fogged = Scene.rgb * (1.0 - FogOpacity);
+	return float4(lerp(Fogged, Scene.rgb, saturate(Visibility)), Scene.a);
+}

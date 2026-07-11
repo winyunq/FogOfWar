@@ -48,6 +48,7 @@ public class FogOfWar : ModuleRules
 				"Projects",
 				"RenderCore",
 				"RHI",
+				"Renderer",
 				"Slate",
 				"SlateCore",
 				"MassCommon",
