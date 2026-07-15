@@ -231,6 +231,24 @@ MassBattleFrameFog Composite
 
 Actor 拖入场景后无需手动指定任何资产；C++ 会自动注册 SceneView GPU pass，不执行 CPU fallback。
 
+### 自动查看最新日志
+
+仓库提供一个不依赖额外 Python 包的日志查看脚本：
+
+```powershell
+python Scripts\ReportLatestMassBattleFrameFogPerf.py
+```
+
+脚本会自动选择项目 `Saved/Logs` 下最近修改的 `.log`，也可以显式指定：
+
+```powershell
+python Scripts\ReportLatestMassBattleFrameFogPerf.py --log D:\UE5Project\Winyunq\Saved\Logs\Winyunq.log --tail 30
+```
+
+脚本中的“串行总时间”定义为：`CPU ParameterPush + GPU VisionMask + GPU Composite`。
+`ArrayUpload` 已包含在 `ParameterPush` 内，只作为子计时展示，不能再次相加；CPU/GPU 可能重叠，所以串行总时间是便于比较的核算上界，不冒充严格墙钟帧时间。
+如果日志没有 `MassBattleFrameFogGPU` 记录，脚本会明确报告无法得到完整场景 Fog 总时间，此时只有 CPU 推送数据，不能拿小地图 GPU 时间代替。
+
 ### 9944 单位实测
 
 测试地图为 `/Game/Map/EastAsia/64`，Win64 Development、D3D12，`FogUpdateRateHz=0`。日志确认本次场景战争迷雾实际收到全部 `9944` 个来源、`24` 个 batch，并且 `SceneGPU=yes`；不是只测试了 728 个单位，也不是空数据路径。

@@ -1,5 +1,6 @@
 MassBattleFrame fog performance analysis
-Fog records: 42
+Fog CPU records: 42
+Fog GPU records: 0
 Minimap GPU reference records: 1
 Fog source counts: 0, 16, 2689, 5350, 8021, 10687, 13356, 16027, 18691, 21366, 24032, 26686, 29352
 Fog push average: 0.125 ms
@@ -8,4 +9,4 @@ Fog array upload average: 0.124 ms
 Fog array upload maximum: 0.420 ms
 Least-squares Fog push slope: 0.0105 microseconds/source
 Least-squares Fog array slope: 0.0105 microseconds/source
-Minimap GPU values are reference measurements; scene-fog GPU time requires the named GPU profiler passes.
+Minimap GPU values are reference measurements and are not included in the scene-fog total.
