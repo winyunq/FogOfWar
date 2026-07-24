@@ -2,20 +2,44 @@
 
 #include "MassBattleFrameFogSceneViewExtension.h"
 
+#include "CommonRenderResources.h"
+#include "Engine/TextureRenderTarget.h"
 #include "GlobalShader.h"
+#include "Misc/ScopeLock.h"
 #include "PipelineStateCache.h"
+#include "PostProcess/PostProcessMaterialInputs.h"
 #include "RenderGraphBuilder.h"
 #include "RenderGraphUtils.h"
 #include "RenderTargetPool.h"
 #include "RHICommandList.h"
+#include "RHIGPUReadback.h"
 #include "RHIStaticStates.h"
 #include "SceneView.h"
 #include "ShaderParameterStruct.h"
-#include "PostProcess/PostProcessMaterialInputs.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogMassBattleFrameFogScene, Log, All);
-DECLARE_GPU_STAT_NAMED(MassBattleFrameFogVisionMask, TEXT("MassBattleFrameFog Vision Mask"));
 DECLARE_GPU_STAT_NAMED(MassBattleFrameFogComposite, TEXT("MassBattleFrameFog Composite"));
+DECLARE_GPU_STAT_NAMED(MassBattleFrameFogSceneVisualMask, TEXT("MassBattleFrameFog Scene Visual Mask"));
+DECLARE_GPU_STAT_NAMED(MassBattleFrameFogLogicMask, TEXT("MassBattleFrameFog Logic Mask"));
+
+void FMassBattleFrameFogMaskReadbackMailbox::Publish_RenderThread(FMassBattleFrameFogMaskReadbackData&& InData)
+{
+	FScopeLock Lock(&CriticalSection);
+	PendingData = MoveTemp(InData);
+	bHasPendingData = true;
+}
+
+bool FMassBattleFrameFogMaskReadbackMailbox::Consume_GameThread(FMassBattleFrameFogMaskReadbackData& OutData)
+{
+	FScopeLock Lock(&CriticalSection);
+	if (!bHasPendingData)
+	{
+		return false;
+	}
+	OutData = MoveTemp(PendingData);
+	bHasPendingData = false;
+	return true;
+}
 
 namespace
 {
@@ -28,11 +52,9 @@ namespace
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 			SHADER_PARAMETER_STRUCT_REF(FViewUniformShaderParameters, View)
 			SHADER_PARAMETER(float, VisionRadiusUU)
-			SHADER_PARAMETER(uint32, ViewingTeamIndex)
-			SHADER_PARAMETER(uint32, DebugRevealAll)
-			SHADER_PARAMETER_SRV(Buffer<uint>, LocationWords)
-			SHADER_PARAMETER_SRV(Buffer<float4>, DynamicParams0)
-			SHADER_PARAMETER_SRV(Buffer<uint>, IsHidden)
+			SHADER_PARAMETER(float, VisionPredictionSeconds)
+			SHADER_PARAMETER(float, SceneProjectionPlaneZ)
+			SHADER_PARAMETER_SRV(Buffer<float>, VisionSourcePositions)
 		END_SHADER_PARAMETER_STRUCT()
 
 		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -45,6 +67,47 @@ namespace
 	{
 	public:
 		DECLARE_GLOBAL_SHADER(FMassBattleFrameFogVisionPS);
+		SHADER_USE_PARAMETER_STRUCT(FMassBattleFrameFogVisionPS, FGlobalShader);
+
+		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+			SHADER_PARAMETER(float, VisibilityStateValue)
+		END_SHADER_PARAMETER_STRUCT()
+
+		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+		{
+			return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+		}
+	};
+
+	class FMassBattleFrameFogWorldMaskVS final : public FGlobalShader
+	{
+	public:
+		DECLARE_GLOBAL_SHADER(FMassBattleFrameFogWorldMaskVS);
+		SHADER_USE_PARAMETER_STRUCT(FMassBattleFrameFogWorldMaskVS, FGlobalShader);
+
+		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+			SHADER_PARAMETER(FVector2f, WorldMaskMin)
+			SHADER_PARAMETER(FVector2f, WorldMaskSize)
+			SHADER_PARAMETER(float, VisionRadiusUU)
+			SHADER_PARAMETER(float, VisionPredictionSeconds)
+			SHADER_PARAMETER_SRV(Buffer<float>, VisionSourcePositions)
+		END_SHADER_PARAMETER_STRUCT()
+
+		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+		{
+			return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+		}
+	};
+
+	class FMassBattleFrameFogWorldMaskPS final : public FGlobalShader
+	{
+	public:
+		DECLARE_GLOBAL_SHADER(FMassBattleFrameFogWorldMaskPS);
+		SHADER_USE_PARAMETER_STRUCT(FMassBattleFrameFogWorldMaskPS, FGlobalShader);
+
+		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+			SHADER_PARAMETER(float, VisibilityStateValue)
+		END_SHADER_PARAMETER_STRUCT()
 
 		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 		{
@@ -80,6 +143,7 @@ namespace
 			SHADER_PARAMETER(FVector2f, OutputExtent)
 			SHADER_PARAMETER(float, FogOpacity)
 			SHADER_PARAMETER(uint32, Debug)
+			SHADER_PARAMETER(uint32, DebugRevealAll)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D, SceneColor)
 			SHADER_PARAMETER_RDG_TEXTURE(Texture2D, VisibilityMask)
 			SHADER_PARAMETER_SAMPLER(SamplerState, LinearSampler)
@@ -93,11 +157,20 @@ namespace
 
 	IMPLEMENT_GLOBAL_SHADER(FMassBattleFrameFogVisionVS, "/Plugin/FogOfWar/Private/MassBattleFrameFogScene.usf", "VisionVS", SF_Vertex);
 	IMPLEMENT_GLOBAL_SHADER(FMassBattleFrameFogVisionPS, "/Plugin/FogOfWar/Private/MassBattleFrameFogScene.usf", "VisionPS", SF_Pixel);
+	IMPLEMENT_GLOBAL_SHADER(FMassBattleFrameFogWorldMaskVS, "/Plugin/FogOfWar/Private/MassBattleFrameFogScene.usf", "WorldMaskVS", SF_Vertex);
+	IMPLEMENT_GLOBAL_SHADER(FMassBattleFrameFogWorldMaskPS, "/Plugin/FogOfWar/Private/MassBattleFrameFogScene.usf", "WorldMaskPS", SF_Pixel);
 	IMPLEMENT_GLOBAL_SHADER(FMassBattleFrameFogCompositeVS, "/Plugin/FogOfWar/Private/MassBattleFrameFogScene.usf", "CompositeVS", SF_Vertex);
 	IMPLEMENT_GLOBAL_SHADER(FMassBattleFrameFogCompositePS, "/Plugin/FogOfWar/Private/MassBattleFrameFogScene.usf", "CompositePS", SF_Pixel);
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FVisionPassParameters, )
 		SHADER_PARAMETER_STRUCT_INCLUDE(FMassBattleFrameFogVisionVS::FParameters, VSParameters)
+		SHADER_PARAMETER_STRUCT_INCLUDE(FMassBattleFrameFogVisionPS::FParameters, PSParameters)
+		RENDER_TARGET_BINDING_SLOTS()
+	END_SHADER_PARAMETER_STRUCT()
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FWorldMaskPassParameters, )
+		SHADER_PARAMETER_STRUCT_INCLUDE(FMassBattleFrameFogWorldMaskVS::FParameters, VSParameters)
+		SHADER_PARAMETER_STRUCT_INCLUDE(FMassBattleFrameFogWorldMaskPS::FParameters, PSParameters)
 		RENDER_TARGET_BINDING_SLOTS()
 	END_SHADER_PARAMETER_STRUCT()
 
@@ -117,23 +190,28 @@ namespace
 		const void* SourceData,
 		const uint32 SourceBytes)
 	{
-		OutBuffer.Release();
 		if (NumElements == 0 || SourceBytes == 0 || SourceData == nullptr)
 		{
 			return;
 		}
 
-		OutBuffer.InitializeWithData(
-			RHICmdList,
-			DebugName,
-			BytesPerElement,
-			NumElements,
-			Format,
-			BUF_Static,
-			[SourceData, SourceBytes](FRHIBufferInitializer& Initializer)
-			{
-				Initializer.WriteData(SourceData, SourceBytes);
-			});
+		const uint32 RequiredBytes = BytesPerElement * NumElements;
+		if (!OutBuffer.Buffer.IsValid() || OutBuffer.NumBytes < RequiredBytes)
+		{
+			OutBuffer.Release();
+			const uint32 CapacityElements = FMath::RoundUpToPowerOfTwo(NumElements);
+			OutBuffer.Initialize(
+				RHICmdList,
+				DebugName,
+				BytesPerElement,
+				CapacityElements,
+				Format,
+				BUF_Dynamic);
+		}
+
+		void* Destination = RHICmdList.LockBuffer(OutBuffer.Buffer, 0, SourceBytes, RLM_WriteOnly);
+		FMemory::Memcpy(Destination, SourceData, SourceBytes);
+		RHICmdList.UnlockBuffer(OutBuffer.Buffer);
 	}
 
 	void ConfigurePipeline(
@@ -156,9 +234,7 @@ FMassBattleFrameFogSceneViewExtension::FMassBattleFrameFogSceneViewExtension(con
 {
 }
 
-FMassBattleFrameFogSceneViewExtension::~FMassBattleFrameFogSceneViewExtension()
-{
-}
+FMassBattleFrameFogSceneViewExtension::~FMassBattleFrameFogSceneViewExtension() = default;
 
 void FMassBattleFrameFogSceneViewExtension::Upload_GameThread(FMassBattleFrameFogSceneUploadData&& UploadData)
 {
@@ -189,60 +265,202 @@ void FMassBattleFrameFogSceneViewExtension::Release_GameThread()
 		});
 }
 
+void FMassBattleFrameFogSceneViewExtension::ResolvePendingReadback_RenderThread()
+{
+	check(IsInRenderingThread());
+	if (!VisibilityStateReadback || !VisibilityStateReadback->IsReady())
+	{
+		return;
+	}
+
+	int32 RowPitchInPixels = 0;
+	int32 BufferHeight = 0;
+	const uint8* Source = static_cast<const uint8*>(
+		VisibilityStateReadback->Lock(RowPitchInPixels, &BufferHeight));
+	const int32 Width = ReadbackDimensions_RenderThread.X;
+	const int32 Height = ReadbackDimensions_RenderThread.Y;
+	if (Source
+		&& Width > 0
+		&& Height > 0
+		&& RowPitchInPixels >= Width
+		&& BufferHeight >= Height)
+	{
+		FMassBattleFrameFogMaskReadbackData ReadbackData;
+		ReadbackData.Dimensions = ReadbackDimensions_RenderThread;
+		ReadbackData.WorldMin = ReadbackWorldMin_RenderThread;
+		ReadbackData.CellSize = ReadbackCellSize_RenderThread;
+		ReadbackData.VisibilityStates.SetNumUninitialized(Width * Height);
+		for (int32 Y = 0; Y < Height; ++Y)
+		{
+			FMemory::Memcpy(
+				ReadbackData.VisibilityStates.GetData() + Y * Width,
+				Source + Y * RowPitchInPixels,
+				Width);
+		}
+		if (ReadbackMailbox_RenderThread.IsValid())
+		{
+			ReadbackMailbox_RenderThread->Publish_RenderThread(MoveTemp(ReadbackData));
+		}
+	}
+
+	VisibilityStateReadback->Unlock();
+	VisibilityStateReadback.Reset();
+}
+
 void FMassBattleFrameFogSceneViewExtension::Upload_RenderThread(
 	FRHICommandListImmediate& RHICmdList,
 	const FMassBattleFrameFogSceneUploadData& UploadData)
 {
 	check(IsInRenderingThread());
-	static_assert(sizeof(FVector) == sizeof(uint32) * 6, "Scene fog shader expects UE5 double FVector storage.");
 	static_assert(sizeof(FVector4f) == sizeof(float) * 4, "Unexpected FVector4f storage.");
-	static_assert(sizeof(bool) == sizeof(uint8), "Scene fog hidden buffer expects byte bool storage.");
 
-	SourceCount_RenderThread = static_cast<uint32>(FMath::Min(
-		UploadData.Locations.Num(),
-		FMath::Min(UploadData.DynamicParams0.Num(), UploadData.IsHidden.Num())));
+	ResolvePendingReadback_RenderThread();
+
+	SourceCount_RenderThread = static_cast<uint32>(UploadData.VisionSourceSamples.Num());
 	InitializeMassBattleFrameFogReadBuffer(
 		RHICmdList,
-		LocationWordsBuffer,
-		TEXT("MassBattleFrameFog.LocationWords"),
-		sizeof(uint32),
-		static_cast<uint32>(UploadData.Locations.Num() * 6),
-		PF_R32_UINT,
-		UploadData.Locations.GetData(),
-		static_cast<uint32>(UploadData.Locations.Num() * sizeof(FVector)));
-	InitializeMassBattleFrameFogReadBuffer(
-		RHICmdList,
-		DynamicParams0Buffer,
-		TEXT("MassBattleFrameFog.DynamicParams0"),
-		sizeof(FVector4f),
-		static_cast<uint32>(UploadData.DynamicParams0.Num()),
-		PF_A32B32G32R32F,
-		UploadData.DynamicParams0.GetData(),
-		static_cast<uint32>(UploadData.DynamicParams0.Num() * sizeof(FVector4f)));
-	InitializeMassBattleFrameFogReadBuffer(
-		RHICmdList,
-		IsHiddenBuffer,
-		TEXT("MassBattleFrameFog.IsHidden"),
-		sizeof(uint8),
-		static_cast<uint32>(UploadData.IsHidden.Num()),
-		PF_R8_UINT,
-		UploadData.IsHidden.GetData(),
-		static_cast<uint32>(UploadData.IsHidden.Num() * sizeof(bool)));
+		VisionSourcePositionBuffer,
+		TEXT("MassBattleFrameFog.VisionSourcePositions"),
+		sizeof(float),
+		static_cast<uint32>(UploadData.VisionSourceSamples.Num() * 4),
+		PF_R32_FLOAT,
+		UploadData.VisionSourceSamples.GetData(),
+		static_cast<uint32>(UploadData.VisionSourceSamples.Num() * sizeof(FVector4f)));
 
 	VisionRadiusUU_RenderThread = FMath::Max(0.0f, UploadData.VisionRadiusUU);
+	VisionPredictionSeconds_RenderThread = FMath::Clamp(
+		static_cast<float>(UploadData.UploadWorldTimeSeconds - UploadData.SourceSampleWorldTimeSeconds),
+		0.0f,
+		FMath::Max(0.0f, UploadData.MaxSourcePredictionSeconds));
 	FogOpacity_RenderThread = FMath::Clamp(UploadData.FogOpacity, 0.0f, 1.0f);
-	ViewingTeamIndex_RenderThread = FMath::Min(UploadData.ViewingTeamIndex, 1023u);
+	SceneProjectionPlaneZ_RenderThread = UploadData.SceneProjectionPlaneZ;
 	bEnabled_RenderThread = UploadData.bEnabled;
 	bDebug_RenderThread = UploadData.bDebug;
 	bDebugRevealAll_RenderThread = UploadData.bDebugRevealAll;
+
+	const bool bHasSourceBuffer = SourceCount_RenderThread == 0
+		|| VisionSourcePositionBuffer.SRV.IsValid();
+	const bool bCanBuildLogicMask = UploadData.bUpdateLogicMask
+		&& UploadData.WorldMaskResource != nullptr
+		&& UploadData.WorldMaskDimensions.X > 0
+		&& UploadData.WorldMaskDimensions.Y > 0
+		&& UploadData.WorldMaskSize.X > 0.0
+		&& UploadData.WorldMaskSize.Y > 0.0
+		&& bHasSourceBuffer;
+	FTextureRHIRef LogicMaskTextureRHI = bCanBuildLogicMask
+		? UploadData.WorldMaskResource->GetRenderTargetTexture()
+		: nullptr;
+	const bool bHasLogicTarget = LogicMaskTextureRHI.IsValid();
+
+	if (!bHasLogicTarget)
+	{
+		return;
+	}
+
+	FRDGBuilder GraphBuilder(RHICmdList);
+	const bool bCanDrawVisionSources = SourceCount_RenderThread > 0
+		&& VisionSourcePositionBuffer.SRV.IsValid();
+	TShaderMapRef<FMassBattleFrameFogWorldMaskVS> MaskVertexShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+	TShaderMapRef<FMassBattleFrameFogWorldMaskPS> MaskPixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+
+	auto AddMaskRasterPass = [&] (
+		FRDGTextureRef TargetTexture,
+		const FIntPoint& TargetDimensions,
+		const float RadiusUU,
+		const float VisibilityValue,
+		const TCHAR* PassLabel)
+	{
+		if (UploadData.bDebugRevealAll)
+		{
+			AddClearRenderTargetPass(GraphBuilder, TargetTexture, FLinearColor::White);
+			return;
+		}
+
+		AddClearRenderTargetPass(GraphBuilder, TargetTexture, FLinearColor::Black);
+		if (!bCanDrawVisionSources)
+		{
+			return;
+		}
+
+		FWorldMaskPassParameters* MaskPass = GraphBuilder.AllocParameters<FWorldMaskPassParameters>();
+		MaskPass->RenderTargets[0] = FRenderTargetBinding(TargetTexture, ERenderTargetLoadAction::ELoad);
+		FMassBattleFrameFogWorldMaskVS::FParameters MaskVS;
+		MaskVS.WorldMaskMin = FVector2f(UploadData.WorldMaskMin);
+		MaskVS.WorldMaskSize = FVector2f(UploadData.WorldMaskSize);
+		MaskVS.VisionRadiusUU = RadiusUU;
+		MaskVS.VisionPredictionSeconds = VisionPredictionSeconds_RenderThread;
+		MaskVS.VisionSourcePositions = VisionSourcePositionBuffer.SRV;
+		MaskPass->VSParameters = MaskVS;
+		FMassBattleFrameFogWorldMaskPS::FParameters MaskPS;
+		MaskPS.VisibilityStateValue = VisibilityValue;
+		MaskPass->PSParameters = MaskPS;
+		const uint32 InstanceCount = SourceCount_RenderThread;
+		GraphBuilder.AddPass(
+			RDG_EVENT_NAME("MassBattleFrameFog.%s(%u)", PassLabel, InstanceCount),
+			MaskPass,
+			ERDGPassFlags::Raster,
+			[MaskPass, MaskVertexShader, MaskPixelShader, TargetDimensions, InstanceCount](FRDGAsyncTask, FRHICommandList& PassRHICmdList)
+			{
+				FGraphicsPipelineStateInitializer PSO;
+				ConfigurePipeline(PassRHICmdList, PSO, MaskVertexShader.GetVertexShader(), MaskPixelShader.GetPixelShader());
+				// Every surviving circle fragment writes the same binary value.
+				// Last-writer-wins is the required OR, so blending only adds an
+				// unnecessary render-target read/modify/write.
+				PSO.BlendState = TStaticBlendState<CW_RED>::GetRHI();
+				PSO.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+				SetGraphicsPipelineState(PassRHICmdList, PSO, 0);
+				SetShaderParameters(PassRHICmdList, MaskVertexShader, MaskVertexShader.GetVertexShader(), MaskPass->VSParameters);
+				SetShaderParameters(PassRHICmdList, MaskPixelShader, MaskPixelShader.GetPixelShader(), MaskPass->PSParameters);
+				PassRHICmdList.SetViewport(0, 0, 0.0f, TargetDimensions.X, TargetDimensions.Y, 1.0f);
+				PassRHICmdList.SetScissorRect(true, 0, 0, TargetDimensions.X, TargetDimensions.Y);
+				PassRHICmdList.SetStreamSource(0, nullptr, 0);
+				PassRHICmdList.DrawPrimitive(0, 2, InstanceCount);
+				PassRHICmdList.SetScissorRect(false, 0, 0, 0, 0);
+			});
+	};
+
+	FRDGTextureRef LogicMaskTexture = GraphBuilder.RegisterExternalTexture(
+		CreateRenderTarget(LogicMaskTextureRHI, TEXT("MassBattleFrameFog.LogicVisibilityMask")));
+	{
+		// This function owns and executes a local graph. End the breadcrumb/event
+		// scope before Execute(); RDG requires the current breadcrumb to have
+		// returned to its sentinel when graph execution begins.
+		RDG_EVENT_SCOPE_STAT(
+			GraphBuilder,
+			MassBattleFrameFogLogicMask,
+			"MassBattleFrameFog LogicMask");
+		AddMaskRasterPass(
+			LogicMaskTexture,
+			UploadData.WorldMaskDimensions,
+			VisionRadiusUU_RenderThread,
+			3.0f / 255.0f,
+			TEXT("LogicCircles"));
+	}
+
+	// Maintain at most one low-frequency staging copy.
+	if (!VisibilityStateReadback)
+	{
+		VisibilityStateReadback = MakeUnique<FRHIGPUTextureReadback>(TEXT("MassBattleFrameFog.VisibilityStateReadback"));
+		ReadbackMailbox_RenderThread = UploadData.ReadbackMailbox;
+		ReadbackDimensions_RenderThread = UploadData.WorldMaskDimensions;
+		ReadbackWorldMin_RenderThread = UploadData.WorldMaskMin;
+		ReadbackCellSize_RenderThread = UploadData.WorldMaskCellSize;
+		AddEnqueueCopyPass(
+			GraphBuilder,
+			VisibilityStateReadback.Get(),
+			LogicMaskTexture,
+			FResolveRect(0, 0, UploadData.WorldMaskDimensions.X, UploadData.WorldMaskDimensions.Y));
+	}
+	GraphBuilder.Execute();
 }
 
 void FMassBattleFrameFogSceneViewExtension::Release_RenderThread()
 {
 	check(IsInRenderingThread());
-	LocationWordsBuffer.Release();
-	DynamicParams0Buffer.Release();
-	IsHiddenBuffer.Release();
+	VisionSourcePositionBuffer.Release();
+	VisibilityStateReadback.Reset();
+	ReadbackMailbox_RenderThread.Reset();
+	ReadbackDimensions_RenderThread = FIntPoint::ZeroValue;
 	SourceCount_RenderThread = 0;
 	bEnabled_RenderThread = false;
 }
@@ -272,7 +490,7 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 	const FPostProcessMaterialInputs& Inputs)
 {
 	const FScreenPassTextureSlice SceneColorSlice = Inputs.GetInput(EPostProcessMaterialInput::SceneColor);
-	if (!SceneColorSlice.IsValid())
+	if (!SceneColorSlice.IsValid() || !bEnabled_RenderThread || bDebugRevealAll_RenderThread)
 	{
 		return FScreenPassTexture(SceneColorSlice);
 	}
@@ -281,8 +499,6 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 	FScreenPassRenderTarget Output = Inputs.OverrideOutput;
 	if (!Output.IsValid())
 	{
-		// The composite pass samples SceneColor, so it must not render into the
-		// same texture when the post-process stack did not provide an override.
 		Output = FScreenPassRenderTarget::CreateFromInput(
 			GraphBuilder,
 			SceneColor,
@@ -297,17 +513,14 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 	const FIntPoint Extent = SceneColor.Texture->Desc.Extent;
 	FRDGTextureDesc MaskDesc = FRDGTextureDesc::Create2D(
 		Extent,
-		PF_R8,
+		PF_G8,
 		FClearValueBinding::Black,
 		TexCreate_RenderTargetable | TexCreate_ShaderResource);
 	FRDGTextureRef VisibilityMask = GraphBuilder.CreateTexture(MaskDesc, TEXT("MassBattleFrameFog.VisibilityMask"));
 
 	const FIntRect ViewRect = SceneColor.ViewRect;
-	const uint32 SourceCount = SourceCount_RenderThread;
-	const bool bCanDrawVision = SourceCount > 0
-		&& LocationWordsBuffer.SRV.IsValid()
-		&& DynamicParams0Buffer.SRV.IsValid()
-		&& IsHiddenBuffer.SRV.IsValid();
+	const bool bCanDrawVision = SourceCount_RenderThread > 0
+		&& VisionSourcePositionBuffer.SRV.IsValid();
 	if (bCanDrawVision)
 	{
 		FVisionPassParameters* VisionPass = GraphBuilder.AllocParameters<FVisionPassParameters>();
@@ -315,39 +528,45 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 		FMassBattleFrameFogVisionVS::FParameters VisionVS;
 		VisionVS.View = View.ViewUniformBuffer;
 		VisionVS.VisionRadiusUU = VisionRadiusUU_RenderThread;
-		VisionVS.ViewingTeamIndex = ViewingTeamIndex_RenderThread;
-		VisionVS.DebugRevealAll = bDebugRevealAll_RenderThread ? 1u : 0u;
-		VisionVS.LocationWords = LocationWordsBuffer.SRV;
-		VisionVS.DynamicParams0 = DynamicParams0Buffer.SRV;
-		VisionVS.IsHidden = IsHiddenBuffer.SRV;
+		VisionVS.VisionPredictionSeconds = VisionPredictionSeconds_RenderThread;
+		VisionVS.SceneProjectionPlaneZ = SceneProjectionPlaneZ_RenderThread;
+		VisionVS.VisionSourcePositions = VisionSourcePositionBuffer.SRV;
 		VisionPass->VSParameters = VisionVS;
+		FMassBattleFrameFogVisionPS::FParameters VisionPS;
+		VisionPS.VisibilityStateValue = 1.0f;
+		VisionPass->PSParameters = VisionPS;
 
-		TShaderMapRef<FMassBattleFrameFogVisionVS> VisionVertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-		TShaderMapRef<FMassBattleFrameFogVisionPS> VisionPixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-		RDG_EVENT_SCOPE_STAT(GraphBuilder, MassBattleFrameFogVisionMask, "MassBattleFrameFog VisionMask");
+		TShaderMapRef<FMassBattleFrameFogVisionVS> VertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+		TShaderMapRef<FMassBattleFrameFogVisionPS> PixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+		RDG_EVENT_SCOPE_STAT(
+			GraphBuilder,
+			MassBattleFrameFogSceneVisualMask,
+			"MassBattleFrameFog Scene Visual Circles");
+		const uint32 InstanceCount = SourceCount_RenderThread;
 		GraphBuilder.AddPass(
-			RDG_EVENT_NAME("MassBattleFrameFog.VisionMask(%u)", SourceCount),
+			RDG_EVENT_NAME("MassBattleFrameFog.SceneVisualCircles(%u)", InstanceCount),
 			VisionPass,
 			ERDGPassFlags::Raster,
-			[VisionPass, VisionVertexShader, VisionPixelShader, ViewRect, SourceCount](FRDGAsyncTask, FRHICommandList& RHICmdList)
+			[VisionPass, VertexShader, PixelShader, ViewRect, InstanceCount](FRDGAsyncTask, FRHICommandList& RHICmdList)
 			{
 				FGraphicsPipelineStateInitializer PSO;
-				ConfigurePipeline(RHICmdList, PSO, VisionVertexShader.GetVertexShader(), VisionPixelShader.GetPixelShader());
-				PSO.BlendState = TStaticBlendState<CW_RED, BO_Add, BF_One, BF_One>::GetRHI();
+				ConfigurePipeline(RHICmdList, PSO, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
+				// Every circle writes the same binary visibility value. Overlap is
+				// therefore an order-independent OR with blending disabled.
+				PSO.BlendState = TStaticBlendState<CW_RED>::GetRHI();
 				PSO.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 				SetGraphicsPipelineState(RHICmdList, PSO, 0);
-				SetShaderParameters(RHICmdList, VisionVertexShader, VisionVertexShader.GetVertexShader(), VisionPass->VSParameters);
+				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VisionPass->VSParameters);
+				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), VisionPass->PSParameters);
 				RHICmdList.SetViewport(ViewRect.Min.X, ViewRect.Min.Y, 0.0f, ViewRect.Max.X, ViewRect.Max.Y, 1.0f);
 				RHICmdList.SetScissorRect(true, ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Max.X, ViewRect.Max.Y);
 				RHICmdList.SetStreamSource(0, nullptr, 0);
-				RHICmdList.DrawPrimitive(0, 2, SourceCount);
+				RHICmdList.DrawPrimitive(0, 2, InstanceCount);
 				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
 			});
 	}
 	else
 	{
-		// An empty source list still needs to produce the mask resource.  The
-		// composite pass intentionally treats this as full fog.
 		AddClearRenderTargetPass(GraphBuilder, VisibilityMask, FLinearColor::Black);
 	}
 
@@ -361,28 +580,29 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 	CompositePS.OutputExtent = FVector2f(Extent.X, Extent.Y);
 	CompositePS.FogOpacity = FogOpacity_RenderThread;
 	CompositePS.Debug = bDebug_RenderThread ? 1u : 0u;
+	CompositePS.DebugRevealAll = 0u;
 	CompositePS.SceneColor = SceneColor.Texture;
 	CompositePS.VisibilityMask = VisibilityMask;
 	CompositePS.LinearSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
 	CompositePass->VSParameters = CompositeVS;
 	CompositePass->PSParameters = CompositePS;
 
-	TShaderMapRef<FMassBattleFrameFogCompositeVS> CompositeVertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
-	TShaderMapRef<FMassBattleFrameFogCompositePS> CompositePixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+	TShaderMapRef<FMassBattleFrameFogCompositeVS> VertexShader(GetGlobalShaderMap(View.GetFeatureLevel()));
+	TShaderMapRef<FMassBattleFrameFogCompositePS> PixelShader(GetGlobalShaderMap(View.GetFeatureLevel()));
 	RDG_EVENT_SCOPE_STAT(GraphBuilder, MassBattleFrameFogComposite, "MassBattleFrameFog Composite");
 	GraphBuilder.AddPass(
 		RDG_EVENT_NAME("MassBattleFrameFog.Composite"),
 		CompositePass,
 		ERDGPassFlags::Raster,
-		[CompositePass, CompositeVertexShader, CompositePixelShader, ViewRect](FRDGAsyncTask, FRHICommandList& RHICmdList)
+		[CompositePass, VertexShader, PixelShader, ViewRect](FRDGAsyncTask, FRHICommandList& RHICmdList)
 		{
 			FGraphicsPipelineStateInitializer PSO;
-			ConfigurePipeline(RHICmdList, PSO, CompositeVertexShader.GetVertexShader(), CompositePixelShader.GetPixelShader());
+			ConfigurePipeline(RHICmdList, PSO, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
 			PSO.BlendState = TStaticBlendState<CW_RGBA, BO_Add, BF_One, BF_Zero>::GetRHI();
 			PSO.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
 			SetGraphicsPipelineState(RHICmdList, PSO, 0);
-			SetShaderParameters(RHICmdList, CompositeVertexShader, CompositeVertexShader.GetVertexShader(), CompositePass->VSParameters);
-			SetShaderParameters(RHICmdList, CompositePixelShader, CompositePixelShader.GetPixelShader(), CompositePass->PSParameters);
+			SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), CompositePass->VSParameters);
+			SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), CompositePass->PSParameters);
 			RHICmdList.SetViewport(ViewRect.Min.X, ViewRect.Min.Y, 0.0f, ViewRect.Max.X, ViewRect.Max.Y, 1.0f);
 			RHICmdList.SetScissorRect(true, ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Max.X, ViewRect.Max.Y);
 			RHICmdList.SetStreamSource(0, nullptr, 0);

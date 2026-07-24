@@ -6,25 +6,61 @@
 #include "RHIUtilities.h"
 #include "SceneViewExtension.h"
 
+class FTextureRenderTargetResource;
+class FRHIGPUTextureReadback;
+
+struct FMassBattleFrameFogMaskReadbackData
+{
+	TArray<uint8> VisibilityStates;
+	FIntPoint Dimensions = FIntPoint::ZeroValue;
+	FVector2D WorldMin = FVector2D::ZeroVector;
+	FVector2D CellSize = FVector2D(1.0, 1.0);
+};
+
+/** Lock-protected one-frame mailbox between the render and game threads. */
+class FMassBattleFrameFogMaskReadbackMailbox final
+{
+public:
+	void Publish_RenderThread(FMassBattleFrameFogMaskReadbackData&& InData);
+	bool Consume_GameThread(FMassBattleFrameFogMaskReadbackData& OutData);
+
+private:
+	FCriticalSection CriticalSection;
+	FMassBattleFrameFogMaskReadbackData PendingData;
+	bool bHasPendingData = false;
+};
+
+/**
+ * One compact upload shared by the high-resolution scene mask and the
+ * HashGrid-aligned unit filter. Every source is float4(world XY + velocity XY);
+ * there is no second entity traversal and no Landscape/material binding.
+ */
 struct FMassBattleFrameFogSceneUploadData
 {
-	TArray<FVector> Locations;
-	TArray<FVector4f> DynamicParams0;
-	TArray<bool> IsHidden;
+	TArray<FVector4f> VisionSourceSamples;
 	float VisionRadiusUU = 1024.0f;
-	float FogOpacity = 0.85f;
-	uint32 ViewingTeamIndex = 0;
+	float FogOpacity = 0.3f;
+	float SceneProjectionPlaneZ = 0.0f;
+	float MaxSourcePredictionSeconds = 0.125f;
+	double SourceSampleWorldTimeSeconds = 0.0;
+	double UploadWorldTimeSeconds = 0.0;
+	FVector2D WorldMaskMin = FVector2D::ZeroVector;
+	FVector2D WorldMaskSize = FVector2D(1.0, 1.0);
+	FVector2D WorldMaskCellSize = FVector2D(1.0, 1.0);
+	FIntPoint WorldMaskDimensions = FIntPoint::ZeroValue;
+	FTextureRenderTargetResource* WorldMaskResource = nullptr;
+	TSharedPtr<FMassBattleFrameFogMaskReadbackMailbox, ESPMode::ThreadSafe> ReadbackMailbox;
+	bool bUpdateLogicMask = false;
 	bool bEnabled = false;
 	bool bDebug = false;
 	bool bDebugRevealAll = false;
 };
 
 /**
- * Scene-side GPU implementation borrowed from the MassBattle minimap fog pass.
- *
- * The render thread rasterizes one projected circle per batch entry into an
- * R8 visibility mask, then composites SceneColor against that mask. The CPU
- * only forwards the already-contiguous MassBattleFrame arrays.
+ * Camera scene fog plus the asynchronous unit-state producer. Sources rasterize
+ * at the scene cadence directly into a native viewport-sized presentation mask
+ * and at a lower cadence into the HashGrid-aligned readback mask. Render frames
+ * sample the cached screen mask while compositing SceneColor.
  */
 class FMassBattleFrameFogSceneViewExtension final : public FSceneViewExtensionBase
 {
@@ -51,14 +87,19 @@ private:
 
 	void Upload_RenderThread(FRHICommandListImmediate& RHICmdList, const FMassBattleFrameFogSceneUploadData& UploadData);
 	void Release_RenderThread();
+	void ResolvePendingReadback_RenderThread();
 
-	FReadBuffer LocationWordsBuffer;
-	FReadBuffer DynamicParams0Buffer;
-	FReadBuffer IsHiddenBuffer;
+	FReadBuffer VisionSourcePositionBuffer;
+	TUniquePtr<FRHIGPUTextureReadback> VisibilityStateReadback;
+	TSharedPtr<FMassBattleFrameFogMaskReadbackMailbox, ESPMode::ThreadSafe> ReadbackMailbox_RenderThread;
+	FIntPoint ReadbackDimensions_RenderThread = FIntPoint::ZeroValue;
+	FVector2D ReadbackWorldMin_RenderThread = FVector2D::ZeroVector;
+	FVector2D ReadbackCellSize_RenderThread = FVector2D(1.0, 1.0);
 	uint32 SourceCount_RenderThread = 0;
 	float VisionRadiusUU_RenderThread = 1024.0f;
-	float FogOpacity_RenderThread = 0.85f;
-	uint32 ViewingTeamIndex_RenderThread = 0;
+	float VisionPredictionSeconds_RenderThread = 0.0f;
+	float FogOpacity_RenderThread = 0.3f;
+	float SceneProjectionPlaneZ_RenderThread = 0.0f;
 	bool bEnabled_GameThread = false;
 	bool bEnabled_RenderThread = false;
 	bool bDebug_RenderThread = false;

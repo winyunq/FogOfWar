@@ -33,7 +33,6 @@ public class FogOfWar : ModuleRules
 				"MassEntity",
 				"MassLOD",
 				"MassMovement",
-				"MassRepresentation",
 				"MassSignals",
 				"MassSpawner"
 			}
@@ -51,6 +50,9 @@ public class FogOfWar : ModuleRules
 				"Renderer",
 				"Slate",
 				"SlateCore",
+				"RTSInputSystem",
+				"MassBattleRTSDiplomacy",
+				"MassBattleISKM",
 				"MassCommon",
 				"UMG", // Needed for UUserWidget
 				"Niagara",

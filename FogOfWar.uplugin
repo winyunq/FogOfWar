@@ -37,6 +37,14 @@
 		{
 			"Name": "OpenRTSCamera",
 			"Enabled": true
+		},
+		{
+			"Name": "MassBattleRTSDiplomacy",
+			"Enabled": true
+		},
+		{
+			"Name": "MassBattleISKM",
+			"Enabled": true
 		}
 	]
 }

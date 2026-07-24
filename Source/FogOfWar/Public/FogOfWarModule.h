@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
+DECLARE_LOG_CATEGORY_EXTERN(LogFogOfWar, Log, All);
+
 /**
  * @file FogOfWarModule.h
  * @brief 声明了战争迷雾插件模块的主类。
@@ -30,4 +32,9 @@ public:
 	 * @details     当插件被引擎卸载或引擎关闭时，此函数会被执行，用于执行清理操作。
 	 */
 	virtual void ShutdownModule() override;
+
+private:
+	void InjectProcessorRegistrationConfig();
+	void AuditProcessorPipeline();
+	FDelegateHandle PostEngineInitHandle;
 };
