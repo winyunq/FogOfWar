@@ -230,6 +230,7 @@ UMassBattleFogAgentRenderProcessor::UMassBattleFogAgentRenderProcessor()
 	, LootInterpQuery(*this)
 	, MinimapSnapshotQuery(*this)
 	, VisibilityWorkSetQuery(*this)
+	, VisionSourceSampleQuery(*this)
 {
 	ExecutionOrder.ExecuteAfter.Add(TEXT("MassBattleHostMonoProcessor"));
 
