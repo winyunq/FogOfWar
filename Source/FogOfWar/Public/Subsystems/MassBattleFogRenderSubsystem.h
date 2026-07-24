@@ -71,16 +71,17 @@ public:
 
 	/**
 	 * The scene controller requests a source snapshot at its own update rate.
-	 * The replacement renderer fulfils the request in the same camera-local
-	 * HashGrid pass that refreshes the final render work set.
+	 * Source membership is rebuilt with the low-frequency camera/logic filter;
+	 * its compact position/velocity set is sampled independently at scene rate.
 	 */
 	void RequestVisionSourceCollection();
+	/** Consumed at the scene cadence; does not consume the low-frequency membership refresh. */
+	bool ConsumeVisionSourceSampleRequest(uint32& OutCollectionRevision);
 	bool ConsumeVisionSourceCollectionRequest(uint32& OutCollectionRevision);
 	bool ShouldCollectVisionSource(const FVector& WorldLocation) const;
 	/**
 	 * Each packed source is XY position + XY velocity. The renderer extrapolates
-	 * this 24 Hz snapshot on the GPU, so the scene edge moves every render frame
-	 * without another entity traversal or another per-frame CPU upload.
+	 * this 24 Hz snapshot on the GPU, so the scene edge moves every render frame.
 	 */
 	void PublishVisionSources(
 		TArray<FVector4f>&& InSources,
@@ -193,6 +194,7 @@ private:
 	int32 LatestMinimapFriendlySourceCount = 0;
 	int32 ActiveProxyCount = 0;
 	int32 UploadedElementCount = 0;
+	bool bVisionSourceSampleRequested = false;
 	bool bVisionSourceCollectionRequested = false;
 	bool bMinimapSnapshotCollectionRequested = false;
 	bool bActive = false;

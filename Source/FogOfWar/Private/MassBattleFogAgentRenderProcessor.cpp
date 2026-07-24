@@ -240,6 +240,7 @@ UMassBattleFogAgentRenderProcessor::UMassBattleFogAgentRenderProcessor()
 
 	ExecutionPriority = 10;
 	ActiveRenderEntityCollection = MakeShared<UE::Mass::FEntityCollection>();
+	VisionSourceEntityCollection = MakeShared<UE::Mass::FEntityCollection>();
 }
 
 FString UMassBattleFogAgentRenderProcessor::GetProcessorName() const
@@ -293,6 +294,11 @@ void UMassBattleFogAgentRenderProcessor::ConfigureQueries(const TSharedRef<FMass
 		.All<FEntityFlagFragment, FTeam, FLocating, FMoving, FVisualize, FSubType, FAttacking>(MARO)
 		.Optional<FMassBattleFogLastSeenFragment, FMassBattleISKMAddonFragment>(MARO)
 		.Optional<FMassBattleFogVisionSourceFragment>(MARO)
+		.RegisterWithProcessor(*this);
+
+	FEntityQueryBuilder(VisionSourceSampleQuery)
+		.All<FAgentTag>()
+		.All<FEntityFlagFragment, FLocating, FMoving>(MARO)
 		.RegisterWithProcessor(*this);
 }
 
@@ -572,6 +578,7 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 								static_cast<float>(Location.Y),
 								Velocity.X,
 								Velocity.Y));
+							VisionSourceEntityQueue.Items.Add(Entity);
 						}
 					}
 
@@ -737,6 +744,7 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 								static_cast<float>(GridLocation.Y),
 								static_cast<float>(GridData.CurrentVelX),
 								static_cast<float>(GridData.CurrentVelY)));
+							VisionSourceEntityQueue.Items.Add(Entity);
 						}
 					}
 				}
@@ -1140,6 +1148,9 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 	{
 		AttackRevealQueue.Reset();
 	}
+	uint32 RequestedVisionSampleRevision = 0;
+	const bool bSampleVisionSources =
+		FogRenderSubsystem->ConsumeVisionSourceSampleRequest(RequestedVisionSampleRevision);
 	uint32 VisionCollectionRevision = 0;
 	bool bCollectVisionSources = false;
 	const bool bCollectMinimapSnapshot = FogRenderSubsystem->ConsumeMinimapSnapshotCollectionRequest();
@@ -1172,14 +1183,15 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 	const bool bRefreshRenderWorkSet = bRenderRevisionChanged;
 	if (bRefreshRenderWorkSet)
 	{
-		// Keep a source request pending until the final GPU mask revision arrives.
-		// The same HashGrid traversal then gathers the next source snapshot and
-		// refreshes the visible render set, instead of doing both on adjacent frames.
+		// Keep the low-frequency source-membership request pending until the next
+		// filter revision. Position/velocity sampling is handled independently at
+		// the scene cadence from that compact membership.
 		bCollectVisionSources =
 			FogRenderSubsystem->ConsumeVisionSourceCollectionRequest(VisionCollectionRevision);
 		if (bCollectVisionSources)
 		{
 			VisionSourceQueue.Reset();
+			VisionSourceEntityQueue.Reset();
 		}
 	}
 	CSV_CUSTOM_STAT(FogMassBattleRender, WorkSetRefresh, bRefreshRenderWorkSet ? 1 : 0, ECsvCustomStatOp::Set);
@@ -1210,6 +1222,12 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 		if (bFullWorkSetConvergence)
 		{
 			LastFullWorkSetRefreshWorldTime = FogWorldTimeSeconds;
+		}
+		if (bCollectVisionSources)
+		{
+			*VisionSourceEntityCollection =
+				UE::Mass::FEntityCollection(VisionSourceEntityQueue.Items);
+			VisionSourceEntityCollectionRevision = VisionCollectionRevision;
 		}
 	}
 
@@ -2371,11 +2389,77 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			FMassEntityQuery::EParallelExecutionFlags::AutoBalance);
 	}
 
-	if (bCollectVisionSources)
+	bool bPublishVisionSources = bCollectVisionSources;
+	uint32 PublishedVisionCollectionRevision = VisionCollectionRevision;
+	if (bSampleVisionSources
+		&& !bCollectVisionSources
+		&& VisionSourceEntityCollection.IsValid()
+		&& VisionSourceEntityCollectionRevision == RequestedVisionSampleRevision)
+	{
+		// Membership comes from the low-frequency camera/radius filter. At the
+		// scene cadence, read only position and velocity for that compact set.
+		// This does not walk the world population or the HashGrid again.
+		VisionSourceQueue.Reset();
+		const TConstArrayView<FMassArchetypeEntityCollection> VisionSourceCollections =
+			VisionSourceEntityCollection->GetUpToDatePerArchetypeCollections(EntityManager);
+		auto SampleVisionSourceChunk = [&, this](FMassExecutionContext& VisionContext)
+		{
+			const int32 NumEntities = VisionContext.GetNumEntities();
+			const auto FlagsList = VisionContext.GetFragmentView<FEntityFlagFragment>();
+			const auto LocatingList = VisionContext.GetFragmentView<FLocating>();
+			const auto MovingList = VisionContext.GetFragmentView<FMoving>();
+			TArray<FVector4f> LocalVisionSources;
+			LocalVisionSources.Reserve(NumEntities);
+			for (int32 Index = 0; Index < NumEntities; ++Index)
+			{
+				if (!FlagsList[Index].HasFlag(ActivatedFlag))
+				{
+					continue;
+				}
+				const FVector& Location = LocatingList[Index].Location;
+				if (!FogRenderSubsystem->ShouldCollectVisionSource(Location))
+				{
+					continue;
+				}
+				const FVector3f& Velocity = MovingList[Index].CurrentVelocity;
+				LocalVisionSources.Add(FVector4f(
+					static_cast<float>(Location.X),
+					static_cast<float>(Location.Y),
+					Velocity.X,
+					Velocity.Y));
+			}
+			if (!LocalVisionSources.IsEmpty())
+			{
+				VisionSourceQueue.Append(LocalVisionSources);
+			}
+		};
+		if (!VisionSourceCollections.IsEmpty())
+		{
+			if constexpr (MBParallelToggle::RenderProcessor || MBParallelToggle::ForceAllSingleThread)
+			{
+				VisionSourceSampleQuery.ForEachEntityChunkInCollections(
+					VisionSourceCollections,
+					Context,
+					SampleVisionSourceChunk);
+			}
+			else
+			{
+				VisionSourceSampleQuery.ParallelForEachEntityChunkInCollection(
+					VisionSourceCollections,
+					Context,
+					SampleVisionSourceChunk,
+					FMassEntityQuery::EParallelExecutionFlags::AutoBalance);
+			}
+		}
+		bPublishVisionSources = true;
+		PublishedVisionCollectionRevision = VisionSourceEntityCollectionRevision;
+	}
+
+	if (bPublishVisionSources)
 	{
 		FogRenderSubsystem->PublishVisionSources(
 			MoveTemp(VisionSourceQueue.Items),
-			VisionCollectionRevision,
+			PublishedVisionCollectionRevision,
 			FogWorldTimeSeconds);
 	}
 	if (bCollectMinimapSnapshot)

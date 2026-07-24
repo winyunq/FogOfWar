@@ -123,8 +123,12 @@ private:
 	 */
 	FMassEntityQuery VisibilityWorkSetQuery;
 
+	/** Position/velocity-only sampling over the already filtered source membership. */
+	FMassEntityQuery VisionSourceSampleQuery;
+
 	FSpinLockArray<FMassEntityHandle> RegistrationQueue;
 	FSpinLockArray<FVector4f> VisionSourceQueue;
+	FSpinLockArray<FMassEntityHandle> VisionSourceEntityQueue;
 	FSpinLockArray<FVector4f> MinimapVisionSourceUnitQueue;
 	FSpinLockArray<FVector4f> MinimapFriendlyNonVisionUnitQueue;
 	FSpinLockArray<FVector4f> MinimapOtherUnitQueue;
@@ -144,6 +148,13 @@ private:
 	 * only when Mass reports an entity-order version change.
 	 */
 	TSharedPtr<UE::Mass::FEntityCollection> ActiveRenderEntityCollection;
+	/**
+	 * Camera/radius-filtered vision-source membership is rebuilt with the
+	 * low-frequency filter. Its positions are sampled independently at the
+	 * scene cadence without walking the full population or HashGrid again.
+	 */
+	TSharedPtr<UE::Mass::FEntityCollection> VisionSourceEntityCollection;
+	uint32 VisionSourceEntityCollectionRevision = 0;
 	uint64 ActiveWorkSetMembershipVersion = 1;
 	uint64 CachedActiveCollectionMembershipVersion = 0;
 	uint32 VisibilityEpoch = 0;

@@ -133,6 +133,7 @@ void UMassBattleFogRenderSubsystem::Configure(
 	if ((!bWasActive && bActive) || bVisionDefinitionChanged)
 	{
 		bMaskReady = false;
+		bVisionSourceSampleRequested = true;
 		bVisionSourceCollectionRequested = true;
 		bMinimapSnapshotCollectionRequested = true;
 	}
@@ -162,6 +163,7 @@ void UMassBattleFogRenderSubsystem::Configure(
 		{
 			++VisionCollectionRevision;
 		}
+		bVisionSourceSampleRequested = true;
 		bVisionSourceCollectionRequested = true;
 	}
 	if (bRenderModeChanged || bTeamMaskChanged || bVisionDefinitionChanged
@@ -187,6 +189,7 @@ void UMassBattleFogRenderSubsystem::Configure(
 		LatestMinimapFogVisibleUnits.Reset();
 		LatestVisionCollectionRevision = 0;
 		LatestVisionSourceWorldTimeSeconds = 0.0;
+		bVisionSourceSampleRequested = false;
 		bVisionSourceCollectionRequested = false;
 		VisibilityStateCells.Reset();
 		bMaskReady = false;
@@ -309,7 +312,16 @@ void UMassBattleFogRenderSubsystem::ConfigureStandaloneMinimapTeams(
 
 void UMassBattleFogRenderSubsystem::RequestVisionSourceCollection()
 {
+	bVisionSourceSampleRequested = true;
 	bVisionSourceCollectionRequested = true;
+}
+
+bool UMassBattleFogRenderSubsystem::ConsumeVisionSourceSampleRequest(uint32& OutCollectionRevision)
+{
+	const bool bWasRequested = bVisionSourceSampleRequested;
+	bVisionSourceSampleRequested = false;
+	OutCollectionRevision = bWasRequested ? VisionCollectionRevision : 0;
+	return bWasRequested;
 }
 
 bool UMassBattleFogRenderSubsystem::ConsumeVisionSourceCollectionRequest(uint32& OutCollectionRevision)
