@@ -1,269 +1,167 @@
-# FogOfWar — Mass Battle GPU Minimap
+# FogOfWar 2.0 — MassBattleFrame 战争迷雾与 GPU 小地图
 
-当前 `Mass` 分支的小地图只有一条实现路径：`UMassBattleFrameMinimapWidget` 直接读取 Mass Battle Frame 已经维护的渲染批数组，低频上传到持久 GPU Buffer，再由 Slate 自定义绘制和 Global Shader 直接画入 Widget 的屏幕区域。
+## 授权与商业扩展
 
-它不使用 Niagara、Niagara Data Channel、CPU 单位遍历、Mass Entity Query、小地图 HashGrid、材质小地图、SceneCapture、独立 RenderTarget 或世界空间特效。
+公开版提供战争迷雾与 GPU 小地图基础能力。利用战争迷雾状态过滤场景单位表现提交、降低大规模单位渲染开销的 **Scene Visibility Performance Extension** 属于商业扩展，不属于本仓库根目录 MIT 授权范围，也不随公开版提供。
 
-## 使用
+如需该扩展的授权版本、适配服务或技术支持，请联系：
 
-使用以下任一种方式放置小地图：
+**winyunq@gmail.com**
 
-- 在 UMG 中放置原生 `Mass Battle Frame Minimap` 控件。
-- 使用插件资产 `Content/Core/MassBattleFrameMiniMap.uasset`。
+商业扩展的具体授权边界见 [COMMERCIAL_FEATURE_LICENSE.md](COMMERCIAL_FEATURE_LICENSE.md)。未经 Winyunq 书面授权，不得复制、分发、再许可或公开其实现。
 
-Widget 的布局位置和尺寸就是最终 GPU 绘制区域。`NativeConstruct` 会自动初始化并立即推送第一帧，之后由 `Update Rate` 控制定时更新。
+本插件不修改 MassBattleFrame 源码。它在 `DefaultMass.ini` 中关闭 MBF 原 Agent Render，并注册同阶段、同优先级、同处理器名称的 FogOfWar 自有实现。替代 Processor 以 HashGrid 低频维护稳定代理池和轻量 `ActiveProxyIds`；VAT/Actor 只处理最终可见实体。ISKM 不是 MassBattleFrame 原版功能，它在独立 `MassBattleISKM` 插件中用自己的最小状态阶段和提交后端消费同一份最终可见集合，不进入 VAT 主 Query。
 
-默认 `Update Rate = 1/3 Hz`，即每 3 秒读取并上传一次新数据。两次更新之间不会重新读取单位；Slate 只用缓存的 GPU Buffer 重画，因此画面可以正常参与 UMG 合成而不会实时追踪单位数据。
+目标只有性能和容量：让 MassBattleFrame 支持更多单位。镜头外和深雾中的单位不进入重表现路径；普通帧的 CPU 遍历、数组写入和后端提交随当前有效工作集增长，而不是随全体单位数或历史实例槽位高水位增长。这不是以画面效果为目标的改造。
 
-## 唯一数据链
+硬约束：任何新增过滤步骤都必须在同一条热路径上删除更多、更贵的后续工作；否则不引入。禁止用预热、额外全量遍历、多级中间状态或重复缓存，以更多计算换取所谓的优化。
 
-```text
-UMassBattleFrameMinimapWidget
-  -> UMassBattleSubsystem::AgentRenderers
-  -> AMassBattleAgentRenderer::SpawnedRenderBatches
-  -> 批量 Append 已有连续数组
-       LocationArray
-       DynamicParams0_Array
-       IsHiddenArray
-  -> 一次异步 Render Command
-  -> 持久 GPU Buffer
-  -> Slate Custom Element
-  -> Global Shader 直接画入 Widget 区域
+启用边界只有 Actor 是否存在：没有 `AMassBattleFrameFogOfWar` 时，替代 Processor 立即调用 MassBattleFrame 原版 `Execute`；Actor 一旦进入场景便自动启用裁剪管线，不提供 `bAutoActivate`、运行时关闭或全量回退。HashGrid、遮罩布局、View Extension 或 Processor 所有权不满足时直接报致命配置错误。
+
+## 当前管线
+
+```mermaid
+flowchart LR
+    A["HashGrid 低频候选收集"] --> B["稳定 ProxyPool + ActiveProxyIds"]
+    B --> C["仅 Active 的 Mass Entity Collection"]
+    C --> D["Fog Agent Render：只含非 ISKM 的最终可见实体"]
+    D --> E1["VAT：LOD/动画后直接写最终稠密数组 O(V_vat)"]
+    D --> E2["Actor：生成 Spawn / Recycle 增量命令 O(Δ)"]
+    C --> E3["ISKM 最小语义状态：仅逻辑 tick，O(V_iskm)"]
+    E3 --> E4["ISKM 后端：Transform / CustomData / Provider Submit"]
+    A --> E["24 Hz 收集镜头附近视野源 XY+速度"]
+    E --> F1["24 Hz 高分辨率场景 Visual Mask"]
+    E --> F2["3 Hz HashGrid 逻辑 Mask"]
+    F1 --> L["每帧一次投影 + SceneColor 合成"]
+    F2 --> G["一次异步格子回读"]
+    G --> A
+    B -->|"0/1 不可见"| H["不进入任何表现 Query"]
+    B -->|"2/3"| J["加入最终可见集合"]
+    A --> K["3 Hz 独立只读小地图 Query（不进入重表现路径）"]
 ```
 
-CPU 只遍历 Renderer 和 Render Batch，并对每个连续数组执行 `TArray::Append`。没有逐单位投影、过滤、重组或 Mass Entity 遍历。坐标换算、Team ID、尺寸取整、隐藏判断和绘制全部在 GPU 完成。
+场景显示与单位过滤共用同一份 `24 Hz` 紧凑视野源上传，但使用两张职责不同的 PF_G8 GPU 图：高分辨率 Visual Mask 按 `24 Hz` 用真实源位置和真实半径绘制，只供场景显示；HashGrid 对齐逻辑 Mask 按 `3 Hz` 保守绘制并异步回读，只供单位过滤。两张图不触发第二次 CPU 遍历或第二次源上传；普通渲染帧只把缓存 Visual Mask 投影一次并合成 SceneColor。不存在 Landscape 扫描、Decal/MID/MPC 或 SceneDepth 世界坐标反算。
 
-## GPU 绘制规则
+场景与小地图消费同一份视野状态，但显示强度参数彼此独立；两者默认都为 `0.30`。状态 `3` 在两者中都严格显示原始画面；状态 `0/1/2` 分别使用场景 Actor 与小地图 Widget 自己的 `0.30`，修改任一侧不会覆盖另一侧。
 
-### 坐标
+## 状态含义
 
-地图范围来自当前关卡中的 `AMapRegion`。没有 Actor 时读取：
+PF_G8 纹理保存精确字节：
 
-```text
-<Project>/Config/MapRegion/<MapName>/MapRegion.ini
-```
+- `0`：深雾。普通单位退出 Active 工作集，不拥有有效 VAT/Actor/ISKM 提交。
+- `1`：异步世界图换区时的保守内部值。与 `0` 相同，不进入 Active 工作集，也不写任何表现后端。
+- `2`：仅用于攻击暴露、`AlwaysFogVisible` 与可安全重放的 `RememberLastSeen` 等单单位例外。提交选定表现后端，但不揭开地形。
+- `3`：真视野。提交选定表现后端，场景显示原始亮度。
 
-两者都没有有效自定义值时使用中心位于世界原点、大小为 `65536 × 65536 UU` 的缺省范围。
+两张 GPU 图都关闭 Blend：圆内片元写同一个值，因此重叠圆天然得到二值 OR，不需要 Max-Blend 或原子合成。Visual Mask 按真实半径写 `0/1`；逻辑 Mask 保持既有真实半径并写 `0/3`。异步回读只读取这张低分辨率逻辑图的精确字节。
 
-Shader 首先计算：
+面向玩法只暴露三种结果：深雾不可见、单单位雾中可见、真视野。状态 `1` 只防止异步布局交接把未知格误判为可见，不是第四种玩法状态，也不产生预热工作。
 
-```text
-UV = (WorldXY - MapMin) / MapSize
-```
+## 单位策略
 
-随后将世界坐标逆时针旋转 90°映射到小地图：
+`FMassBattleFogVisionSourceFragment` 是可选的 Archetype 级只读策略，添加到 MassBattle AgentConfig 的 `ExtraData.ConstSharedFragments`。它不是 `FMassVisibilityFragment`，也不保存运行时可见性。
 
-```text
-ScreenUV = (UV.y, 1 - UV.x)
-```
+- `bProvidesVision=true`：本地玩家或盟友的该类型可以提供视野。敌方单位永远不会因为这个值揭开地形。
+- `Standard`：深雾隐藏；发起攻击时只临时暴露攻击者本身。
+- `AlwaysFogVisible`：镜头内始终至少为状态 `2`。它在迷雾中显示为暗色，但不揭开地形或周围单位。
+- `RememberLastSeen`：用于建筑。最后一次状态 `3` 时保存位置、朝向、缩放、动画/材质参数、血条、LOD 和样式；失去视野后不得读取建筑后台的实时变化。
 
-### 逻辑分辨率与向上取整
+`RememberLastSeen` 类型还需把 `FMassBattleFogLastSeenFragment` 添加到 `ExtraData.Fragments`。快照读写发生在替代 Processor 的有效实体执行中，不存在逐帧全量缓存维护 Query。当前冻结快照只由 VAT 后端重放；Actor/ISKM 类型在失去真视野后隐藏，避免为了画面语义重新引入隐藏实体更新或泄露实时状态。重新获得真视野时直接校正到权威状态。
 
-`Logical Resolution` 表示地图每个轴的逻辑像素数，不改变 Widget 的真实布局尺寸。默认值为 `256`。
+永久可见、攻击暴露和建筑快照都只把单个单位提升到状态 `2`，不会改写世界状态纹理。小地图在同一个 3 Hz 快照中把这些单位加入“雾中暗标记”批次；真视野单位标记随后以全亮度覆盖同位置暗标记。
 
-单位或视野的世界直径先换算成逻辑像素，再逐轴向上取整：
+## 表现后端提交与稠密帧缓冲
 
-```text
-LogicalSize = max(ceil((2 * RadiusUU) * LogicalResolution / MapSize), 1)
-```
+- 镜头候选窗口外：不提交，包括友军；视野源收集与表现提交相互独立，不会形成自锁。
+- 深雾状态 `0` 与内部状态 `1`：从 `ActiveProxyIds` 以 swap-remove 移除；VAT 不上传重数组，Actor 只产生必要的回收命令，独立 ISKM 后端不再收到该实体。
+- 状态 `2/3`：只提交最终选定的一个后端。VAT 工作量为最终粒子数，Actor 创建/回收按状态变化增量执行，ISKM 只消费发布后的最终可见实体集合。
+- `AlwaysFogVisible` 是有意保留的单单位例外；`RememberLastSeen` 仅在 VAT 可安全重放冻结快照时保留。
 
-最后按 Widget 的真实尺寸整体缩放。结果保证任何非零单位或视野至少占一个逻辑像素；当分辨率为 `256` 时，最小绘制尺度就是整张地图的 `1/256`。
+Fog 不通过增删 Mass Tag 表示可见性。`FRenderingTag`/`FNotRenderingTag` 仍只服从 MBF 原本的 `FVisualize::bEnable`，避免单位过雾边界时触发 Archetype 迁移。
 
-- 单位绘制为正方形。
-- 视野绘制为圆形。
-- 非正方形地图或 Widget 下，单位仍取两轴结果中的较大值保持正方形，视野同样保持圆形。
+`FVisualizing` 中的 Target/Interp/动画状态保持稳定；`InstanceId` 只是本帧稠密数组位置，不再是永久 Niagara 槽。每帧从 `ActiveProxyIds` 直接写最终数组，`LocationArray.Num()` 跟随本帧有效数量，数组 Capacity 不因普通可见性波动收缩。不存在“先写全体稀疏数组，再压缩重数组”的 Pass。Active handles 使用 UE 5.8 的版本感知 `UE::Mass::FEntityCollection` 缓存：成员稳定时不重写 handle 列表，只有成员变化才替换 handles；Archetype entity-order version 变化时由 UE 自行重建 ranges。VAT 稠密准备每个 Active 代理只查一次 `FVisualizing`，并在本帧复用该指针，不再重复随机读取 Flags/Visualize/Visualizing。
 
-### Team ID 与颜色
+ISKM 不属于 MassBattleFrame 原版，也不嵌入 Fog 替换处理器。唯一实现位于独立 `MassBattleISKM` 插件：Fog 开启时，Fog 的 VAT 主 Query 通过 `None<FMassBattleISKMAddonFragment>` 在 Archetype 层直接排除 ISKM；ISKM 的最小语义状态阶段与提交后端只遍历 Fog 发布的最终可见 collection，并复用同一个 `FEntityCollection` 缓存。Fog 关闭时 ISKM 使用自身未过滤管线。清理只扫描 Renderer 当前存活实例，不扫描历史 slot 高水位。不存在旧后端、回退或双写路径。
 
-Mass Battle Frame 已把 Team ID 编码在 `DynamicParams0.W` 的低 10 位。Shader 直接取得：
+## 场景迷雾
 
-```text
-TeamID = asuint(DynamicParams0.W) & 1023
-Color = TeamColors[TeamID]
-```
+场景显示由相机 Scene View Extension 完成。每个渲染帧只用一个六顶点实例把已经完成的高分辨率 Visual Mask 投影到屏幕 PF_G8 `VisibilityMask`，再用一个全屏 Pass 合成 SceneColor：迷雾区为 `SceneColor * (1 - FogOpacity)`，揭开区保持原始 SceneColor。普通渲染帧的该路径与视野源数量无关。场景默认 `FogOpacity=0.30`，所以两区分别是 `70%` 与 `100%` 原画面亮度。
 
-颜色配置文件为：
+源位置默认 `24 Hz` 收集并只上传一次；同一次上传以一个 `DrawPrimitive(..., InstanceCount)` GPU 实例化调用把所有真实圆写入场景 Visual Mask。XY 速度只用于该次生成时的有上限预测。普通渲染帧不会重新外推或逐源绘制；无论一个还是一万个源，屏幕投影固定为一个实例。
 
-```text
-<Project>/Config/MapRegion/<MapName>/MinimapColors.ini
-```
+缓存世界状态图统一投到 `SceneFogProjectionPlaneZ`，不使用提供视野单位自身的 Z。这仍然是平面屏幕投影：高空粒子的屏幕位置与地面 XY 可能存在视差，这是该相机合成方案的已知限制，不是 Landscape 或材质接收问题。
 
-格式：
+HashGrid 对齐 PF_G8 逻辑图默认 `3 Hz`，只服务表现后端的一次异步回读；一个纹素严格对应一个 `UMassBattleHashGridSubsystem::AgentCellSize` XY 格。`24 Hz` 视野源请求仍使用既有镜头窗口与视野窗口的并集 HashGrid 扫描同时刷新 Active 工作集；3 Hz 逻辑图复用最近一次源 Buffer，不发起第二条 source-only 扫描或 CPU 上传。普通渲染帧与模拟子帧的重表现 Query 都只调度缓存的 Active collection，不遍历全体 Agent。
+
+场景显示完全不扫描 Landscape、不创建 Decal/MID/MPC、不重注册地形组件，也不改任何地图材质。屏幕显示直接消费缓存的高分辨率 Visual Mask，因此没有第二次单位收集、源上传或逐源屏幕 Pass。
+
+## 小地图
+
+小地图默认 `3 Hz`，每 `1/3 s` 请求一次全图紧凑快照。它使用独立的低频只读 Query，只读取激活标记、Team、Location、Visualize 和可选迷雾策略/最后快照；不会让重表现 Query 回退到全量 LOD、VAT、插值和 Niagara 打包。该轻查询写出：
+
+- 友军/盟军实际视野源前缀；
+- 全部单位的 `float4(XYZ + Team)` 标记；
+- 永久可见和建筑最后快照的雾中暗标记。
+
+攻击事件另追加单单位暗标记，不写视野 stencil。小地图不读取场景裁剪后的 Niagara Batch，因此镜头外的友军视野不会从小地图消失。
+
+## 玩家与盟友
+
+- 本地玩家身份来自 `URTSSelectionSubsystem::GetPlayerTeamIndex()`。
+- 盟友来自当前世界 `URTSDiplomacySubsystem::GetSnapshot()`；只合并关系为 `Allied` 的 Team，`Neutral` 不共享视野。
+- `AlliedTeamIndices` 保留为手工追加项，不会覆盖外交系统结果。
+- 场景与小地图共享同一份玩家/盟友位掩码、统一视野半径和单位类型策略。
+- 外交扫描只读取当前玩家的一行小型 Team 关系矩阵；关系修订后在下一次 `24 Hz` 场景配置或 `3 Hz` 小地图配置时生效，不查询也不遍历单位。
+- 东亚 `PVE_R_1936` 中 Team `2/3/4/5` 同属 Alliance `100`，因此任意一方作为本地玩家时都会合并其余三方的视野源。
+
+## Processor 接管
+
+`Config/DefaultMass.ini`：
 
 ```ini
-[MinimapUnitColors]
-DefaultTeamColor=(R=0.7,G=0.7,B=0.7,A=1.0)
-TeamColorCount=4
-TeamColor0=(R=0.45,G=0.45,B=0.45,A=1.0)
-TeamColor1=(R=0.10,G=0.72,B=0.18,A=1.0)
-TeamColor2=(R=0.85,G=0.12,B=0.10,A=1.0)
-TeamColor3=(R=0.12,G=0.34,B=0.95,A=1.0)
+[/Script/MassBattle.MassBattleAgentRenderProcessor]
+bAutoRegisterWithProcessingPhases=False
+
+[/Script/FogOfWar.MassBattleFogAgentRenderProcessor]
+bAutoRegisterWithProcessingPhases=True
 ```
 
-GPU 颜色表固定覆盖 `0..1023`。缺少 `TeamColorN` 的 Team ID 使用 `DefaultTeamColor`，当前缺省色是最亮白色的 `0.7` 倍。
+FogOfWar 在 `PostConfigInit` 把 Agent Render 所有权写入当前进程的 Mass 配置缓存，发生在 Processor CDO 和 Phase 列表冻结之前；不会修改 MassBattleFrame 文件。`PostEngineInit` 再审计实际 Phase 列表，并强制要求“原 Agent Render 不存在、Fog Agent Render 存在”；不满足时直接 Fatal，不存在运行时切换、双写或兼容分支。ISKM 始终是独立插件管线，MassBattleFrame 没有 ISKM Processor 可供接管。
 
-### 单位、视野与战争迷雾
+副本保持 MBF 原来的 `FrameEnd`、Priority `10`、依赖和处理器名称。文件头记录上游 SHA-256；升级 MassBattleFrame 时机械同步副本，再重新应用标记为 `FOG-OF-WAR INSERTION` 的改动。
 
-绘制顺序是：
+## 明确禁止
 
-1. 绘制所有 `IsHidden == false` 的单位色块。
-2. 仅用 `TeamID == ViewingTeam` 且未隐藏的单位绘制圆形视野模板。
-3. 最后绘制黑色战争迷雾，但在视野模板覆盖的像素跳过，因此雾会正确遮住不可见单位。
+- 普通渲染帧或模拟子帧在表现 Processor 中全量扫描 Mass Agent；
+- 普通帧遍历全世界 `AgentGrid.Agents` 或历史 Renderer 槽位；
+- 先生成全体 Niagara 数据再二次删除；
+- CPU 圆覆盖、CPU 网格膨胀或 CPU 视野集合求解；
+- 除既有 VisibilityMask + SceneColor 合成之外再增加屏幕全量管线，或用 SceneDepth 做逐像素世界坐标反算；
+- `FMassVisibilityFragment`；
+- `VisionMapGrid`、`PreviousVision`；
+- 用 Fog 频繁增删 Mass Tag；
+- 把攻击者或永久可见单位当作地形视野源。
 
-当前没有联盟/共享视野输入，所以不会猜测哪些 Team 是盟友。`Viewing Team` 只代表一个确切 Team ID；如果以后需要联盟共享视野，必须增加明确的 Team 关系输入。
+## 默认值
 
-## 主要参数
+| 模块 | 默认值 |
+| --- | ---: |
+| 小地图快照 | `3 Hz` |
+| 场景 Visual Mask | `24 Hz`，默认视口分辨率，单轴最高 `2048`、总像素最高 `2,097,152` |
+| HashGrid 逻辑 Mask/回读 | `3 Hz` |
+| 场景显示 | 每个渲染帧固定 `1` 个缓存状态图投影实例 + `1` 个 SceneColor Composite Pass |
+| 场景迷雾强度 | `0.30`（独立显示参数） |
+| 小地图迷雾强度 | `0.30`（独立显示参数） |
+| Active HashGrid 垂直半高 | `4096 cm`（`DefaultMass.ini` 可调） |
+| 空闲 Niagara Batch 最短保温 | `20 s` |
+| Landscape/材质额外热路径 | `0`；不绑定 Landscape、Decal、MID 或 MPC |
 
-| 参数 | 默认值 | 含义 |
-| --- | ---: | --- |
-| `Logical Resolution` | `256` | 地图每个轴的逻辑像素数；控制最小向上取整尺度。 |
-| `Update Rate` | `1/3 Hz` | 数据缓存更新频率；默认每 3 秒一次。 |
-| `Unit Radius` | `100 UU` | 单位正方形的世界半径。 |
-| `Vision Radius` | `4000 UU` | 当前 Viewing Team 的圆形视野半径。 |
-| `Fog Opacity` | `0.5` | 未揭示区域的黑色遮罩透明度。 |
-| `Viewing Team` | `0` | 唯一能揭示当前小地图迷雾的 Team ID。 |
+## 验证
 
-运行时可调用对应的 `SetUpdateRateHz`、`SetMinimapResolution`、`SetUnitRadiusUU`、`SetVisionRadiusUU`、`SetFogDarkenOpacity` 和 `SetViewingTeamIndex`。除更新频率外，参数修改会立即重新推送缓存。
+2026-07-21 的当前版本已删除旧 `AFogOfWar` 类、三个旧蓝图资产及动态启用入口，并把 8 个地图实例和 UI 类引用迁移到唯一的 `BP_MassBattleFrameFogOfWar`。完整 UE 5.8 Editor 构建已通过；冷启动日志确认原 Agent Render 缺席、Fog Agent Render 独占对应阶段。该验证证明编译、加载和管线所有权，不代替目标大单位地图的 Insights/GPU 验收。
 
-## 性能日志
+CSV 分类 `FogMassBattleRender` 暴露 `WorkSetRefresh`、`VisionGather`、`SpatialCandidates`、`FogVisibilityTests`、`FogVisibleCandidates`、`VisionGatherCandidates`、`VisionSources`、`ActiveHandleListRebuilt`、`MinimapSnapshotAgents` 和 `UploadedElements`。一次刷新只能出现一遍融合空间扫描；普通稳定帧 `WorkSetRefresh=0`，成员稳定时 `ActiveHandleListRebuilt=0`，`UploadedElements` 必须跟随最终可见 VAT 数而不是全体单位数。这些计数证明复杂度边界，不能替代目标地图的性能实测。
 
-启用小地图后会输出三类日志：
+场景蓝图 CDO 默认 `FogOpacity=0.30`，各关卡 Fog Actor 应继承该值；小地图的 `0.30` 来自独立 Widget 参数。若地图复制自曾经保存过其他数值的 Actor，必须重置场景实例覆盖，否则 C++/蓝图新默认不会覆盖已序列化的旧值。
 
-```text
-MassBattleMinimapPerf GT: Agents=... Batches=... BulkMergeAndSchedule=...ms UploadBytes=...
-MassBattleMinimapPerf RT: Agents=... BufferCreateAndUpload=...ms
-MassBattleMinimapPerf GPU: Agents=... UnitsAvg=...ms VisionAvg=...ms FogAvg=...ms TotalAvg=...ms
-```
-
-- GT：批数组合并和提交 Render Command 的耗时，`CpuAgentTraversalCount` 固定为 `0`。
-- RT：创建/替换 GPU Buffer 并上传缓存的耗时，只在低频更新时发生。
-- GPU：每 15 次绘制异步采样一次，累计后输出单位、视野和雾三个 Pass 的平均值。
-
-已记录的 `9,944` 单位样例为：GT `0.088 ms`、RT `0.150 ms`、GPU Units `0.033 ms`、Vision `0.037 ms`、Fog `0.004 ms`、GPU Total `0.097 ms`。这是一次场景测量，不是硬件无关保证。
-
-## 当前保留资产与源码
-
-小地图运行时核心只有：
-
-```text
-Content/Core/MassBattleFrameMiniMap.uasset
-Shaders/Private/MassBattleMinimap.usf
-Source/FogOfWar/Public/UI/MassBattleFrameMinimapWidget.h
-Source/FogOfWar/Private/UI/MassBattleFrameMinimapWidget.cpp
-Source/FogOfWar/Private/UI/MassBattleFrameMinimapSlate.h
-Source/FogOfWar/Private/UI/MassBattleFrameMinimapSlate.cpp
-Source/FogOfWar/Public/Minimap/MapRegion.h
-Source/FogOfWar/Private/Minimap/MapRegion.cpp
-```
-
-`Content/Core/Materials/MinimapTarget.uasset` 仍被当前 Widget Blueprint 的基础地图图层引用，但不参与单位或战争迷雾计算。
-
-## 明确不存在的旧路径
-
-仓库不再保留以下小地图实现，以免它们被误认为可选方案：
-
-- `UMinimapWidget` CPU/HashGrid/RenderTarget 路径
-- `MassMinimapProcessors` 与 `MinimapCellObserver`
-- Niagara / NDC 小地图资产
-- 小地图材质数据纹理上传
-- 世界空间 Niagara 预览或摄像机前移动方案
-- 旧测试地图和旧小地图 Widget 示例
-
-场景主画面的战争迷雾是另一条独立功能，不作为小地图的数据入口，也不与上述小地图 GPU Buffer 耦合。
-
-## MassBattleFrame 场景战争迷雾
-
-先明确一个设计纠正：Niagara 只能作为视野圆形的 GPU 光栅化器，不能凭空把已经渲染完成的 `SceneColor` 反相变暗；真正的战争迷雾必须有一个最终合成步骤。因此本实现不再把 Niagara 当作场景输出，而是直接使用独立 SceneView GPU pass 完成“视野遮罩 + SceneColor 合成”。
-
-新增原生 Actor：
-
-```text
-AMassBattleFrameFogOfWar
-```
-
-一键放置资产：
-
-```text
-Content/Core/BP_MassBattleFrameFogOfWar.uasset
-```
-
-该 Blueprint 仅继承 `AMassBattleFrameFogOfWar`，没有 Niagara、材质或网格依赖；拖入关卡后使用 C++ 默认参数即可运行。原有的 `Content/Core/MassBattleFogOfWar.uasset` 仍属于旧 `AFogOfWar` 路径，不是本功能的默认资产。
-
-这是一个独立的 `AActor`，不继承 `AFogOfWar`，不使用旧后处理源列表，也不修改 MassBattleFrame 源码。Actor 直接读取 `UMassBattleSubsystem` 已经维护的 `AgentRenderers -> SpawnedRenderBatches`，按 batch 整块转发位置、队伍和隐藏状态；不会查询 Mass Entity、遍历单位、访问 HashGrid 或重新投影数据。
-
-```text
-MassBattleFrame SpawnedRenderBatches
-  -> GPU-facing Location / DynamicParams0 / IsHidden buffers
-  -> SceneView GPU pass: 每个视野源实例化一个世界半径圆形
-  -> R8 VisibilityMask（ViewingTeamIndex + IsHidden 在 GPU 过滤）
-  -> 一次 SceneColor 合成：SceneColor × FogFactor
-```
-
-最终场景输出由独立 SceneView GPU pass 完成；`bFogDebug=true` 时直接把 GPU 可见性遮罩输出到场景，便于确认圆形视野和队伍过滤。Actor 拖入关卡后不需要 Niagara、材质、网格、SceneCapture、RenderTarget 或手工绑定后处理材质。
-
-### 可调参数
-
-| 参数 | 默认值 | 作用 |
-| :-- | --: | :-- |
-| `TemporaryVisionRadius` | `1024 cm` | 当前临时默认视野半径；后续接入单位独立半径时替换。 |
-| `ViewingTeamIndex` | `0` | GPU 侧参与揭雾的队伍。 |
-| `FogOpacity` | `0.85` | 不可见场景区域的暗化强度。 |
-| `bFogDebug` | `false` | 是否直接显示 GPU 可见性遮罩（白=已揭示，黑=战争迷雾）。 |
-| `bDebugRevealAll` | `false` | Debug 开关；开启后所有已上传单位都揭开视野，绕过 Team 和 `IsHidden` 过滤，仅用于排查数据。 |
-| `FogUpdateRateHz` | `0` | `0` 表示不锁帧、每个引擎 Tick 更新；大于 `0` 时按指定频率更新。 |
-| `bAutoActivate` | `true` | BeginPlay 自动启用场景 GPU 战争迷雾。 |
-
-### 性能接口
-
-```text
-GetLastMassBattleFrameFogPerfStats()
-[FogOfWarPerf][MassBattleFrameFog]
-```
-
-当前接口记录参数推送、批量数组上传、来源数量、batch 数量，以及 Scene GPU 路径状态。RenderDoc/Unreal GPU profiler 中可直接查看：
-
-```text
-MassBattleFrameFog Vision Mask
-MassBattleFrameFog Composite
-```
-
-这两个 GPU pass 的复杂度是 `O(可见性源实例数 + 当前视图像素数)`，不是 `O(单位数 × 屏幕像素数)`；CPU 侧只有 batch 级 `Append` 和 GPU buffer 更新，不执行单位级 fallback。
-
-Actor 拖入场景后无需手动指定任何资产；C++ 会自动注册 SceneView GPU pass，不执行 CPU fallback。
-
-### 自动查看最新日志
-
-仓库提供一个不依赖额外 Python 包的日志查看脚本：
-
-```powershell
-python Scripts\ReportLatestMassBattleFrameFogPerf.py
-```
-
-脚本会自动选择项目 `Saved/Logs` 下最近修改的 `.log`，也可以显式指定：
-
-```powershell
-python Scripts\ReportLatestMassBattleFrameFogPerf.py --log D:\UE5Project\Winyunq\Saved\Logs\Winyunq.log --tail 30
-```
-
-脚本中的“串行总时间”定义为：`CPU ParameterPush + GPU VisionMask + GPU Composite`。
-`ArrayUpload` 已包含在 `ParameterPush` 内，只作为子计时展示，不能再次相加；CPU/GPU 可能重叠，所以串行总时间是便于比较的核算上界，不冒充严格墙钟帧时间。
-如果日志没有 `MassBattleFrameFogGPU` 记录，脚本会明确报告无法得到完整场景 Fog 总时间，此时只有 CPU 推送数据，不能拿小地图 GPU 时间代替。
-
-### 9944 单位实测
-
-测试地图为 `/Game/Map/EastAsia/64`，Win64 Development、D3D12，`FogUpdateRateHz=0`。日志确认本次场景战争迷雾实际收到全部 `9944` 个来源、`24` 个 batch，并且 `SceneGPU=yes`；不是只测试了 728 个单位，也不是空数据路径。
-
-| 指标 | 实测结果 | 说明 |
-| :-- | --: | :-- |
-| Fog `ParameterPush` | 平均 `0.158 ms`，最大 `0.279 ms` | 场景 Fog Actor 单次参数推送。 |
-| Fog `ArrayUpload` | 平均 `0.157 ms`，最大 `0.278 ms` | batch 数组合并和提交 GPU buffer 的 CPU 侧耗时。 |
-| Mass 来源 | `9944` sources / `24` batches | 全部来源进入场景 GPU 视野 pass；Team 和 `IsHidden` 在 GPU 过滤。 |
-| 数据量 | `424088 bytes` | 同一批 9944 单位的小地图日志记录的三组来源数组及颜色表上传量。 |
-
-同一批 9944 单位的小地图 GPU 参考采样为：Units `0.061 ms`、Vision `0.081 ms`、Fog `0.006 ms`、Total `0.189 ms`（3 个样本平均）。这组数值是小地图 GPU pass 的参考，不冒充场景 Fog 的 GPU 时间；场景 Fog 的确切 GPU 时间应在 profiler 中查看 `MassBattleFrameFog Vision Mask` 和 `MassBattleFrameFog Composite`。
-
-## GitHub Pages
-
-网页文档由独立 `Document` 分支根目录发布：
-
-<https://winyunq.github.io/FogOfWar/>
+最终性能结论必须在目标上万单位地图使用 Unreal Insights、`stat GPU` 和 RenderDoc 测量，至少记录总单位数、空间候选数、深雾剔除数、单单位雾中可见例外数、真视野数、最终 Niagara 元素/上传字节、状态纹理尺寸与各 GPU Pass 时间。

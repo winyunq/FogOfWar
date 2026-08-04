@@ -1,6 +1,7 @@
 /*
 * FogOfWar-owned snapshot of MassBattleAgentRenderProcessor.
 * See the matching header for upstream hashes and synchronization rules.
+* Winyunq commercial integration: see COMMERCIAL_FEATURE_LICENSE.md.
 */
 
 #include "MassBattleFogAgentRenderProcessor.h"
@@ -32,7 +33,7 @@ namespace UE::FogOfWar::Private
 }
 
 // Fragments
-#include "Fragments/PrimaryType.h"
+#include "Fragments/MainType.h"
 #include "Fragments/SubType.h"
 #include "Fragments/StyleType.h"
 #include "Fragments/Transform.h"
@@ -52,6 +53,7 @@ namespace UE::FogOfWar::Private
 #include "Fragments/Attack.h"
 #include "Fragments/Hit.h"
 #include "Fragments/Death.h"
+#include "Fragments/Determinism.h"
 #include "Fragments/Move.h"
 #include "Fragments/Trace.h"
 #include "Fragments/Event.h"
@@ -90,10 +92,86 @@ namespace UE::FogOfWar::Private
 #include "Algo/Sort.h"
 #include "Containers/Queue.h"
 
+namespace UE::FogOfWar::Private
+{
+	FORCEINLINE FVector4f EncodeAnimTracksA(
+		const uint16 StartFrame0,
+		const uint16 EndFrame0,
+		const uint16 StartFrame1,
+		const uint16 EndFrame1,
+		const uint16 StartFrame2,
+		const uint16 EndFrame2,
+		const float FPS0,
+		const float FPS1)
+	{
+		const auto PackFrames = [](const uint16 StartFrame, const uint16 EndFrame)
+		{
+			return (static_cast<uint32>(FMath::Min<uint16>(EndFrame, 32639u)) << 16)
+				| static_cast<uint32>(StartFrame);
+		};
+		const auto PackFPS = [](const float FPS)
+		{
+			return static_cast<uint16>(
+				FMath::Clamp(FMath::RoundToInt(FPS * 16.0f), 0, 65535));
+		};
+
+		const uint32 X = PackFrames(StartFrame0, EndFrame0);
+		const uint32 Y = PackFrames(StartFrame1, EndFrame1);
+		const uint32 Z = PackFrames(StartFrame2, EndFrame2);
+		const uint16 FPS1Packed = PackFPS(FPS1);
+		const uint32 W =
+			(static_cast<uint32>(FMath::Min<uint16>(FPS1Packed, 32639u)) << 16)
+			| static_cast<uint32>(PackFPS(FPS0));
+		return FVector4f(
+			*reinterpret_cast<const float*>(&X),
+			*reinterpret_cast<const float*>(&Y),
+			*reinterpret_cast<const float*>(&Z),
+			*reinterpret_cast<const float*>(&W));
+	}
+
+	FORCEINLINE FVector4f EncodeAnimTracksB(
+		const float FPS2,
+		const bool bLoop0,
+		const bool bLoop1,
+		const bool bLoop2,
+		const bool bNoFrameExtrap)
+	{
+		const uint16 FPS2Packed = static_cast<uint16>(
+			FMath::Clamp(FMath::RoundToInt(FPS2 * 16.0f), 0, 65535));
+		const uint32 X =
+			static_cast<uint32>(FPS2Packed)
+			| (bLoop0 ? 1u << 16 : 0u)
+			| (bLoop1 ? 1u << 17 : 0u)
+			| (bLoop2 ? 1u << 18 : 0u)
+			| (bNoFrameExtrap ? 1u << 19 : 0u);
+		return FVector4f(*reinterpret_cast<const float*>(&X), 0.0f, 0.0f, 0.0f);
+	}
+
+	FORCEINLINE void WriteParentRelativeTransform(
+		FAgentRenderBatchData& Data,
+		const int32 InstanceId,
+		const FVector& ParentLocation,
+		const FQuat& FacingRotation,
+		const FVector& RenderLocation,
+		const FQuat& RenderRotation,
+		const FVector& RenderScale)
+	{
+		Data.LocationArray[InstanceId] = ParentLocation;
+		Data.OrientationArray[InstanceId] = FQuat4f(FacingRotation);
+		Data.ScaleArray[InstanceId] = FVector3f::OneVector;
+
+		const FQuat InverseFacing = FacingRotation.Inverse();
+		Data.RelLocArray[InstanceId] = FVector3f(
+			InverseFacing.RotateVector(RenderLocation - ParentLocation));
+		Data.RelRotArray[InstanceId] = FQuat4f(InverseFacing * RenderRotation);
+		Data.RelScaleArray[InstanceId] = FVector3f(RenderScale);
+	}
+}
+
 // --------------------------------------------------------------------------------
 // Custom Writer for Bulk Access
 // --------------------------------------------------------------------------------
-struct FMassTextPopWriter : public FNDCWriterBase
+struct FFogMassTextPopWriter : public FNDCWriterBase
 {
 	FNiagaraDataChannelVariableBuffer* PositionBuffer = nullptr;
 	FNiagaraDataChannelVariableBuffer* LocationBuffer = nullptr;
@@ -262,7 +340,7 @@ void UMassBattleFogAgentRenderProcessor::ConfigureQueries(const TSharedRef<FMass
 		.None<FMassBattleISKMAddonFragment>()
 		.Optional<FNotRenderingTag, FRenderingWithParticleTag, FRenderingWithActorTag, FRenderingTag, FAppearingTag, FDyingTag>()
 		.All<FSubType, FStyleType, FTeam, FLocating, FRotating, FCollider, FVisualize, FHealth, FHealthBar, FAppear, FAttack, FHit, FDeath, FMove, FDefence, FDebuffing>(MARO)
-		.All<FEntityFlagFragment, FStatistics, FScaling, FVisualizing, FTextPop, FAttacking, FMoving>(MARW)
+		.All<FEntityFlagFragment, FDeterminism, FScaling, FVisualizing, FTextPop, FAttacking, FMoving>(MARW)
 		.Optional<FMassBattleFogLastSeenFragment>(MARW)
 		.All<FAnimating>(MARW)
 		.All<FLODShared, FAnimShared, FTracingShared>(MARO)
@@ -284,9 +362,8 @@ void UMassBattleFogAgentRenderProcessor::ConfigureQueries(const TSharedRef<FMass
 
 	FEntityQueryBuilder(MinimapSnapshotQuery)
 		.All<FAgentTag>()
-		.All<FEntityFlagFragment, FTeam, FLocating, FVisualize>(MARO)
+		.All<FEntityFlagFragment, FTeam, FLocating>(MARO)
 		.Optional<FMassBattleFogLastSeenFragment>(MARO)
-		.Optional<FMassBattleISKMAddonFragment>(MARO)
 		.Optional<FMassBattleFogVisionSourceFragment>(MARO)
 		.RegisterWithProcessor(*this);
 
@@ -925,9 +1002,9 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 					&& Rendering->bIsBindingActorSwappable
 					&& (IsValid(Rendering->BindingActorPtr) || IsValid(Rendering->BindingComponentPtr)))
 				{
-					if (const FStatistics* Statistics = MassAPI.GetFragmentPtr<FStatistics>(Proxy.Entity))
+					if (const FDeterminism* Determinism = MassAPI.GetFragmentPtr<FDeterminism>(Proxy.Entity))
 					{
-						AgentSubsystem.ActorRecycleQueue.Enqueue({ Proxy.Entity, Statistics->UniqueID });
+						AgentSubsystem.ActorRecycleQueue.Enqueue({ Proxy.Entity, Determinism->UniqueID });
 					}
 				}
 
@@ -953,6 +1030,7 @@ void UMassBattleFogAgentRenderProcessor::SetBatchFrameCount(
 	const int32 SafeCount = FMath::Max(0, Count);
 	Data.FreeSlotArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
 	Data.IsHiddenArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.CoolDowns.SetNumZeroed(SafeCount, EAllowShrinking::No);
 	for (int32 Index = 0; Index < SafeCount; ++Index)
 	{
 		Data.FreeSlotArray[Index] = true;
@@ -965,6 +1043,15 @@ void UMassBattleFogAgentRenderProcessor::SetBatchFrameCount(
 	Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array.SetNumUninitialized(SafeCount, EAllowShrinking::No);
 	Data.CurrentLODArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
 	Data.StyleArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.VelocityArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.AngVelArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.InterpParamsArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.AnimTracksA.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.AnimTracksB.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.UniqueIDArray.SetNumZeroed(SafeCount, EAllowShrinking::No);
+	Data.RelLocArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.RelRotArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
+	Data.RelScaleArray.SetNumUninitialized(SafeCount, EAllowShrinking::No);
 }
 
 void UMassBattleFogAgentRenderProcessor::PrepareDenseRenderFrame(
@@ -1140,8 +1227,12 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 	CSV_SCOPED_TIMING_STAT(FogMassBattleRender, Processor);
 	auto& MB = UMassBattleSubsystem::GetRef(this);
 
-	// Track whether this is a simulation tick or just a render frame
-	const bool bIsSimTick = MB.IsSubFrameActive(ESubFrame::CombatAndTick);
+	// Net builds can schedule PostCombat on a presentation-only frame. Only the
+	// final simulation sub-frame may advance targets, registration, animation
+	// state, or the Niagara logic-tick timestamp.
+	const bool bIsSimTick =
+		MB.IsSubFrameScheduled(ESubFrame::PostCombat)
+		&& MB.IsSimulationTick();
 	const float SimDeltaTime = MB.GetCalculatedStepTime();
 	const float RenderDeltaTime = World->GetDeltaSeconds();
 	const double FogWorldTimeSeconds = World->GetTimeSeconds();
@@ -1310,7 +1401,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 		auto AnimatingList = Context.GetMutableFragmentView<FAnimating>();
 
 		auto FlagsList = Context.GetMutableFragmentView<FEntityFlagFragment>();
-		auto StatisticsList = Context.GetMutableFragmentView<FStatistics>();
+		auto DeterminismList = Context.GetMutableFragmentView<FDeterminism>();
 
 		auto StyleTypeList = Context.GetFragmentView<FStyleType>();
 		auto HealthBarList = Context.GetFragmentView<FHealthBar>();
@@ -1399,7 +1490,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 					if (Rendering.bIsBindingActorSwappable
 						&& (IsValid(Rendering.BindingActorPtr) || IsValid(Rendering.BindingComponentPtr)))
 					{
-						MS.ActorRecycleQueue.Enqueue({ Entity, StatisticsList[i].UniqueID });
+						MS.ActorRecycleQueue.Enqueue({ Entity, DeterminismList[i].UniqueID });
 					}
 					if (!Flags.HasFlag(NotRenderingFlag))
 					{
@@ -1461,7 +1552,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			}
 
 			// Get fragment references needed for both sim tick and render frame
-			auto& Statistics = StatisticsList[i];
+			auto& Determinism = DeterminismList[i];
 			auto& Attacking = AttackingList[i];
 			auto& Appear = AppearList[i];
 			auto& Attack = AttackList[i];
@@ -1554,13 +1645,13 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 							|| !IsValid(Rendering.BindingActorPtr)
 							|| !IsValid(Rendering.BindingComponentPtr)))
 					{
-						MS.ActorSpawnRequestQueue.Enqueue({ Entity, Statistics.UniqueID });
+						MS.ActorSpawnRequestQueue.Enqueue({ Entity, Determinism.UniqueID });
 					}
 					else if (!bActorShouldSubmit
 						&& Rendering.bIsBindingActorSwappable
 						&& (IsValid(Rendering.BindingActorPtr) || IsValid(Rendering.BindingComponentPtr)))
 					{
-						MS.ActorRecycleQueue.Enqueue({ Entity, Statistics.UniqueID });
+						MS.ActorRecycleQueue.Enqueue({ Entity, Determinism.UniqueID });
 					}
 					Rendering.InstanceId = INDEX_NONE;
 					Rendering.bInterpInitialized = false;
@@ -1573,7 +1664,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 						Context.Defer().SwapTags<FRenderingWithActorTag, FRenderingWithParticleTag>(Entity);
 						Flags.ClearFlag(RenderingWithActorFlag);
 						Flags.SetFlag(RenderingWithParticleFlag);
-						MS.ActorRecycleQueue.Enqueue({ Entity, Statistics.UniqueID });
+						MS.ActorRecycleQueue.Enqueue({ Entity, Determinism.UniqueID });
 					}
 					else if (!Flags.HasFlag(RenderingWithParticleFlag))
 					{
@@ -1598,10 +1689,10 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 				if (bIsFirstUpdate)
 				{
-					int32 IdleIdx = AnimationHelpers::PickRandomIndex(Animation.AnimData.IdleAnimData, Statistics.RandomStream);
+					int32 IdleIdx = AnimationHelpers::PickRandomIndex(Animation.AnimData.IdleAnimData, Determinism.RandomStream);
 					if (IdleIdx != -1) Animating.SelectedIdleAnimIndex = IdleIdx;
 
-					int32 MoveIdx = AnimationHelpers::PickRandomIndex(Animation.AnimData.MoveAnimData, Statistics.RandomStream);
+					int32 MoveIdx = AnimationHelpers::PickRandomIndex(Animation.AnimData.MoveAnimData, Determinism.RandomStream);
 					if (MoveIdx != -1) Animating.SelectedMoveAnimIndex = MoveIdx;
 				}
 
@@ -1641,42 +1732,42 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 						case EAnimState::Falling:
 							if (Animating.SelectedFallAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
 							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.FallAnimData, Statistics.RandomStream);
+								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.FallAnimData, Determinism.RandomStream);
 								if (NewIndex != -1) Animating.SelectedFallAnimIndex = NewIndex;
 							}
 							break;
 						case EAnimState::Appearing:
 							if (Animating.SelectedAppearAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
 							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.AppearAnimData, Statistics.RandomStream);
+								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.AppearAnimData, Determinism.RandomStream);
 								if (NewIndex != -1) Animating.SelectedAppearAnimIndex = NewIndex;
 							}
 							break;
 						case EAnimState::Attacking:
 							if (Animating.SelectedAttackAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
 							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.AttackAnimData, Statistics.RandomStream);
+								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.AttackAnimData, Determinism.RandomStream);
 								if (NewIndex != -1) Animating.SelectedAttackAnimIndex = NewIndex;
 							}
 							break;
 						case EAnimState::BeingHit:
 							if (Animating.SelectedHitAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
 							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.HitAnimData, Statistics.RandomStream);
+								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.HitAnimData, Determinism.RandomStream);
 								if (NewIndex != -1) Animating.SelectedHitAnimIndex = NewIndex;
 							}
 							break;
 						case EAnimState::Dying:
 							if (Animating.SelectedDeathAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
 							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.DeathAnimData, Statistics.RandomStream);
+								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.DeathAnimData, Determinism.RandomStream);
 								if (NewIndex != -1) Animating.SelectedDeathAnimIndex = NewIndex;
 							}
 							break;
 						case EAnimState::Montage:
 							if (Animating.SelectedMontageAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
 							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.OtherAnimData, Statistics.RandomStream);
+								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.OtherAnimData, Determinism.RandomStream);
 								if (NewIndex != -1) Animating.SelectedMontageAnimIndex = NewIndex;
 							}
 							break;
@@ -1696,7 +1787,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 						Data.SelfEntity = Entity;
 						Data.PreviousState = Animating.PreviousAnimState;
 						Data.NewState = Animating.AnimState;
-						Data.UniqueID = Statistics.UniqueID;
+						Data.UniqueID = Determinism.UniqueID;
 
 						// Default values for CurrentAnimInfo
 						float AnimPlayRate = 1.0f;
@@ -1847,13 +1938,13 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 						if (bActorShouldSubmit
 							&& (!IsValid(Rendering.BindingActorPtr) || !IsValid(Rendering.BindingComponentPtr)))
 						{
-							MS.ActorSpawnRequestQueue.Enqueue({ Entity, StatisticsList[i].UniqueID });
+							MS.ActorSpawnRequestQueue.Enqueue({ Entity, DeterminismList[i].UniqueID });
 						}
 						else if (!bActorShouldSubmit
 							&& Rendering.bIsBindingActorSwappable
 							&& (IsValid(Rendering.BindingActorPtr) || IsValid(Rendering.BindingComponentPtr)))
 						{
-							MS.ActorRecycleQueue.Enqueue({ Entity, StatisticsList[i].UniqueID });
+							MS.ActorRecycleQueue.Enqueue({ Entity, DeterminismList[i].UniqueID });
 						}
 					}
 					continue;
@@ -1906,13 +1997,40 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				TextPopList[i].Text_Value_Style_Scale_Offset_Array.Reset();
 				Data.FreeSlotArray[InstanceId] = false;
 				Data.IsHiddenArray[InstanceId] = false;
-				Data.LocationArray[InstanceId] = FogLastSeen->SnapshotLocation;
-				Data.OrientationArray[InstanceId] = FogLastSeen->SnapshotRotation;
-				Data.ScaleArray[InstanceId] = FogLastSeen->SnapshotScale;
+				if (Data.bNewPredictionModel)
+				{
+					UE::FogOfWar::Private::WriteParentRelativeTransform(
+						Data,
+						InstanceId,
+						FogLastSeen->SnapshotLocation,
+						FQuat(FogLastSeen->SnapshotRotation),
+						FogLastSeen->SnapshotLocation,
+						FQuat(FogLastSeen->SnapshotRotation),
+						FVector(FogLastSeen->SnapshotScale));
+				}
+				else
+				{
+					Data.LocationArray[InstanceId] = FogLastSeen->SnapshotLocation;
+					Data.OrientationArray[InstanceId] = FogLastSeen->SnapshotRotation;
+					Data.ScaleArray[InstanceId] = FogLastSeen->SnapshotScale;
+				}
 				Data.DynamicParams0_Array[InstanceId] = FogLastSeen->SnapshotDynamicParams0;
 				Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array[InstanceId] = FogLastSeen->SnapshotHealthBar;
 				Data.CurrentLODArray[InstanceId] = FogLastSeen->SnapshotLOD;
 				Data.StyleArray[InstanceId] = FogLastSeen->SnapshotStyle;
+				Data.VelocityArray[InstanceId] = FVector3f::ZeroVector;
+				Data.AngVelArray[InstanceId] = FVector3f::ZeroVector;
+				Data.InterpParamsArray[InstanceId] = FVector4f::Zero();
+				Data.AnimTracksA[InstanceId] = FVector4f::Zero();
+				Data.AnimTracksB[InstanceId] =
+					UE::FogOfWar::Private::EncodeAnimTracksB(
+						0.0f,
+						false,
+						false,
+						false,
+						true);
+				Data.UniqueIDArray[InstanceId] =
+					MB.MakeRenderIdentityToken(DeterminismList[i].UniqueID);
 
 				Rendering.TargetLocation = FogLastSeen->SnapshotLocation;
 				Rendering.InterpLocation = FogLastSeen->SnapshotLocation;
@@ -1938,14 +2056,18 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			}
 
 			const FInterpParams& InterpParams = RenderList[i].InterpParams;
-			const bool bUseInterpolation = InterpParams.IsEnabled() && Rendering.bInterpInitialized;
+			const bool bUseInterpolation =
+				InterpParams.IsEnabled()
+				&& !Data.bNewPredictionModel
+				&& Rendering.bInterpInitialized;
 			FVector AgentRenderLocation = FVector::ZeroVector;
 			FQuat AgentRenderRotation = FQuat::Identity;
 			FVector AgentRenderScale = FVector::OneVector;
+			FQuat AgentFacingRot = FQuat(Rotating.RotationQuat);
 
-			// Authoritative transform targets change on simulation ticks. Render-only
-			// frames interpolate the cached target and must not recompute the same mesh,
-			// collider and pivot transforms for every visible unit.
+			// FLocating is the authoritative root on the domain surface. Rendering
+			// contributes only the authored mesh-local transform; collider dimensions
+			// never participate in visual Z placement.
 			if (bIsSimTick || !bUseInterpolation)
 			{
 				const FVisualize& RenderFrag = RenderList[i];
@@ -1966,7 +2088,6 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 				AgentRenderScale = CombinedTransform.GetScale3D()
 					* Scaling.Scale * FVector(Scaling.JiggleMultiplier);
-				FQuat AgentFacingRot = FQuat(Rotating.RotationQuat);
 				if (MoveFrag.Tilt.TiltMode == ETiltMode::OnlyMesh)
 				{
 					AgentFacingRot *= FQuat(MovingFrag.CurrentTilt);
@@ -1976,15 +2097,10 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 					AgentFacingRot *= FQuat(MovingFrag.CurrentTilt.Inverse());
 				}
 
-				const float SelfRadius = Collider.Radius * Scaling.Scale;
-				const float SelfShaftHalfHeight = Collider.Height * Scaling.Scale * 0.5f;
-				const float SelfTotalHalfHeight = SelfShaftHalfHeight + SelfRadius;
-				const FQuat PhysicsRotation = FQuat(Rotating.RotationQuat)
-					* FQuat(Collider.RelativeRotation.Quaternion());
+				FVector MeshLocalLocation = CombinedTransform.GetLocation();
+				MeshLocalLocation.Z = 0.0;
 				AgentRenderLocation = Locating.Location;
-				AgentRenderLocation -= PhysicsRotation.RotateVector(
-					FVector(0.0, 0.0, SelfTotalHalfHeight));
-				AgentRenderLocation += AgentFacingRot.RotateVector(CombinedTransform.GetLocation());
+				AgentRenderLocation += AgentFacingRot.RotateVector(MeshLocalLocation);
 				AgentRenderRotation = CombinedTransform.GetRotation().IsIdentity()
 					? AgentFacingRot
 					: AgentFacingRot * CombinedTransform.GetRotation();
@@ -1994,11 +2110,34 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			if (bIsSimTick)
 			{
 				Rendering.TargetLocation = AgentRenderLocation;
+				const FQuat4f PreviousRenderRotation = Rendering.TargetRotation;
 				Rendering.TargetRotation = (FQuat4f)AgentRenderRotation;
 				Rendering.TargetScale = (FVector3f)AgentRenderScale;
+				const FQuat4f PreviousFacingRotation =
+					Rendering.TargetFacingRotation;
+				Rendering.TargetFacingRotation = FQuat4f(AgentFacingRot);
 
 				// Cache velocity for predictive interpolation
 				Rendering.CachedVelocity = MovingFrag.CurrentVelocity;
+				FQuat AngularDelta =
+					Data.bNewPredictionModel
+						? AgentFacingRot
+							* FQuat(PreviousFacingRotation).Inverse()
+						: AgentRenderRotation
+							* FQuat(PreviousRenderRotation).Inverse();
+				AngularDelta.EnforceShortestArcWith(FQuat::Identity);
+				FVector AngularAxis(0.0, 0.0, 1.0);
+				float AngularAngle = 0.0f;
+				if (!AngularDelta.IsIdentity(KINDA_SMALL_NUMBER))
+				{
+					AngularDelta.ToAxisAndAngle(
+						AngularAxis,
+						AngularAngle);
+				}
+				const float AngularDeltaTime =
+					SimDeltaTime > 0.0f ? SimDeltaTime : 0.001f;
+				Rendering.CachedAngularVelocity =
+					FVector3f(AngularAxis * (AngularAngle / AngularDeltaTime));
 
 				// Update target animation frames (like TargetLocation for transforms) | 更新目标动画帧（类似变换的TargetLocation）
 				Rendering.TargetFrame0 = Animating.AnimBlendResult.CurrentFrame0;
@@ -2247,13 +2386,55 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			}
 			Data.FreeSlotArray[InstanceId] = false;
 			Data.IsHiddenArray[InstanceId] = false;
-			Data.LocationArray[InstanceId] = FinalLocation;
-			Data.OrientationArray[InstanceId] = FinalRotation;
-			Data.ScaleArray[InstanceId] = FinalScale;
+			Data.UniqueIDArray[InstanceId] =
+				MB.MakeRenderIdentityToken(DeterminismList[i].UniqueID);
+			if (Data.bNewPredictionModel)
+			{
+				UE::FogOfWar::Private::WriteParentRelativeTransform(
+					Data,
+					InstanceId,
+					Locating.Location,
+					AgentFacingRot,
+					AgentRenderLocation,
+					AgentRenderRotation,
+					AgentRenderScale);
+			}
+			else
+			{
+				Data.LocationArray[InstanceId] = FinalLocation;
+				Data.OrientationArray[InstanceId] = FinalRotation;
+				Data.ScaleArray[InstanceId] = FinalScale;
+			}
 			Data.DynamicParams0_Array[InstanceId] = DynamicParams0;
 			Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array[InstanceId] = FVector3f(FinalHBOpacity, FinalHBCurrentRatio, FinalHBTargetRatio);
 			Data.CurrentLODArray[InstanceId] = Rendering.CurrentLOD;
 			Data.StyleArray[InstanceId] = StyleTypeList[i].Index;
+			Data.VelocityArray[InstanceId] = Rendering.CachedVelocity;
+			Data.AngVelArray[InstanceId] = Rendering.CachedAngularVelocity;
+			Data.InterpParamsArray[InstanceId] = FVector4f(
+				InterpParams.InterpSpeed,
+				InterpParams.PredictTime,
+				InterpParams.SnapDist,
+				InterpParams.IsEnabled() ? 1.0f : 0.0f);
+			const float CachedSampleRate =
+				static_cast<float>(Rendering.CachedSampleRate);
+			Data.AnimTracksA[InstanceId] =
+				UE::FogOfWar::Private::EncodeAnimTracksA(
+					Rendering.CachedStartFrame0,
+					Rendering.CachedEndFrame0,
+					Rendering.CachedStartFrame1,
+					Rendering.CachedEndFrame1,
+					Rendering.CachedStartFrame2,
+					Rendering.CachedEndFrame2,
+					Rendering.CachedPlayRate0 * CachedSampleRate,
+					Rendering.CachedPlayRate1 * CachedSampleRate);
+			Data.AnimTracksB[InstanceId] =
+				UE::FogOfWar::Private::EncodeAnimTracksB(
+					Rendering.CachedPlayRate2 * CachedSampleRate,
+					Rendering.CachedLoop0,
+					Rendering.CachedLoop1,
+					Rendering.CachedLoop2,
+					Rendering.bNoFrameExtrap);
 
 			if (bReturningFromRememberedSnapshot)
 			{
@@ -2306,7 +2487,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 	// The minimap needs an all-world snapshot at a low frequency, but that does
 	// not justify running the heavy render/animation query for N agents. Keep the
-	// scan narrow: four read-only fragments plus the optional fog policy/memory.
+	// scan narrow: three read-only fragments plus the optional fog policy/memory.
 	if (bCollectMinimapSnapshot)
 	{
 		MBForEachEntityChunk<MBParallelToggle::RenderProcessor>(
@@ -2318,8 +2499,6 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				const auto Flags = MinimapContext.GetFragmentView<FEntityFlagFragment>();
 				const auto Teams = MinimapContext.GetFragmentView<FTeam>();
 				const auto Locations = MinimapContext.GetFragmentView<FLocating>();
-				const auto Visualize = MinimapContext.GetFragmentView<FVisualize>();
-				const auto AddonISKM = MinimapContext.GetFragmentView<FMassBattleISKMAddonFragment>();
 				const auto LastSeen = MinimapContext.GetFragmentView<FMassBattleFogLastSeenFragment>();
 				const FMassBattleFogVisionSourceFragment* FogPolicy =
 					MinimapContext.GetConstSharedFragmentPtr<FMassBattleFogVisionSourceFragment>();
@@ -2328,7 +2507,6 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 					? FogPolicy->VisibilityPolicy
 					: EMassBattleFogVisibilityPolicy::Standard;
 				const bool bHasLastSeen = LastSeen.Num() == NumEntities;
-				const bool bHasAddonISKM = AddonISKM.Num() == NumEntities;
 
 				TArray<FVector4f> LocalVisionSources;
 				TArray<FVector4f> LocalFriendlyNonVision;
@@ -2340,9 +2518,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 				for (int32 Index = 0; Index < NumEntities; ++Index)
 				{
-					const bool bPresentationEnabled = Visualize[Index].bEnable
-						|| (bHasAddonISKM && AddonISKM[Index].bEnable);
-					if (!Flags[Index].HasFlag(ActivatedFlag) || !bPresentationEnabled)
+					if (!Flags[Index].HasFlag(ActivatedFlag))
 					{
 						continue;
 					}
@@ -2519,8 +2695,8 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			RegistrationQueue.Items.Sort([&](const FMassEntityHandle& A, const FMassEntityHandle& B)
 			{
 				int32 ID_A = -1; int32 ID_B = -1;
-				if (MA.IsValid(A)) if (const auto* Stats = MA.GetFragmentPtr<FStatistics>(A)) ID_A = Stats->UniqueID;
-				if (MA.IsValid(B)) if (const auto* Stats = MA.GetFragmentPtr<FStatistics>(B)) ID_B = Stats->UniqueID;
+				if (MA.IsValid(A)) if (const auto* Det = MA.GetFragmentPtr<FDeterminism>(A)) ID_A = Det->UniqueID;
+				if (MA.IsValid(B)) if (const auto* Det = MA.GetFragmentPtr<FDeterminism>(B)) ID_B = Det->UniqueID;
 				return ID_A < ID_B;
 			});
 		}
@@ -2540,14 +2716,16 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			auto& Flags = MA.GetFragmentRef<FEntityFlagFragment>(EntityToRegister);
 			auto& Locating = MA.GetFragmentRef<FLocating>(EntityToRegister);
 			auto& Rotating = MA.GetFragmentRef<FRotating>(EntityToRegister);
-			auto& Scale = MA.GetFragmentRef<FScaling>(EntityToRegister);
 			auto& Scaling = MA.GetFragmentRef<FScaling>(EntityToRegister);
-			auto& Collider = MA.GetFragmentRef<FCollider>(EntityToRegister);
 			auto& Animating = MA.GetFragmentRef<FAnimating>(EntityToRegister);
 			auto& HealthBar = MA.GetFragmentRef<FHealthBar>(EntityToRegister);
 			auto& Team = MA.GetFragmentRef<FTeam>(EntityToRegister);
 			auto& Move = MA.GetFragmentRef<FMove>(EntityToRegister);
 			auto& Moving = MA.GetFragmentRef<FMoving>(EntityToRegister);
+			const FDeterminism& Determinism =
+				MA.GetFragmentRef<FDeterminism>(EntityToRegister);
+			const int32 AgentUniqueID =
+				MB.MakeRenderIdentityToken(Determinism.UniqueID);
 			const FMassBattleFogVisionSourceFragment* RegisterFogPolicy =
 				MA.GetConstSharedFragmentPtr<FMassBattleFogVisionSourceFragment>(EntityToRegister);
 			FMassBattleFogLastSeenFragment* RegisterLastSeen =
@@ -2667,28 +2845,13 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				AgentFacingRot = AgentFacingRot * (FQuat)Moving.CurrentTilt.Inverse();
 			}
 
-			const float SelfRadius = Collider.Radius * Scaling.Scale;
-			const float SelfShaftHalfHeight = Collider.Height * Scaling.Scale * 0.5f;
-			const float SelfTotalHalfHeight = SelfShaftHalfHeight + SelfRadius;
-
-			const FQuat4f PhysicsRotation = Rotating.RotationQuat * Collider.RelativeRotation.Quaternion();
-			const FVector PhysicsUp = (FVector)PhysicsRotation.GetUpVector();
-			const float PhysicsOffset = SelfShaftHalfHeight * FMath::Abs(PhysicsUp.Z) + SelfRadius;
-			const float GroundZ = Locating.Location.Z - PhysicsOffset;
-
-			// Use PhysicsRotation for visual calculations to match capsule
-			const float VisualOffset = SelfShaftHalfHeight * FMath::Abs(PhysicsUp.Z) + SelfRadius;
-			const float VisualCenterZ = GroundZ + VisualOffset;
-
+			// The entity root already lies on the Landscape/domain surface.
+			// Renderer offsets remain mesh-local (normally 0,0,0); no capsule
+			// center/pivot correction is allowed to change visual Z.
+			FVector MeshLocalLocation = CombinedTransform.GetLocation();
+			MeshLocalLocation.Z = 0.0;
 			FVector AgentRenderLocation = Locating.Location;
-			AgentRenderLocation.Z = VisualCenterZ;
-
-			// Pivot uses physics rotation for correct pivot point during tilt
-			FVector PivotOffset = ((FQuat)PhysicsRotation).RotateVector(FVector(0, 0, SelfTotalHalfHeight));
-
-			AgentRenderLocation -= PivotOffset;
-			// Apply offset as absolute transform (rotated by facing, not scaled)
-			AgentRenderLocation += AgentFacingRot.RotateVector(CombinedTransform.GetLocation());
+			AgentRenderLocation += AgentFacingRot.RotateVector(MeshLocalLocation);
 
 			FQuat AgentRenderRotation = CombinedTransform.GetRotation().IsIdentity() ? AgentFacingRot : (AgentFacingRot * CombinedTransform.GetRotation());
 			FTransform EntityTransform(AgentRenderRotation, AgentRenderLocation, AgentRenderScale);
@@ -2729,26 +2892,90 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			{
 				NewInstanceId = Data.FreeSlotArray.Add(false);
 				Data.IsHiddenArray.Add(false);
-				Data.LocationArray.Add(SlotLocation);
-				Data.OrientationArray.Add(SlotRotation);
-				Data.ScaleArray.Add(SlotScale);
-				Data.DynamicParams0_Array.Add(SlotDynamicParams);
-				Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array.Add(SlotHealthBar);
-				Data.CurrentLODArray.Add(SlotLOD);
-				Data.StyleArray.Add(SlotStyle);
+				Data.CoolDowns.Add(RendererActor->PoollingCoolDown);
+				Data.LocationArray.AddDefaulted();
+				Data.OrientationArray.AddDefaulted();
+				Data.ScaleArray.AddDefaulted();
+				Data.DynamicParams0_Array.AddDefaulted();
+				Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array.AddDefaulted();
+				Data.CurrentLODArray.AddDefaulted();
+				Data.StyleArray.AddDefaulted();
+				Data.VelocityArray.AddDefaulted();
+				Data.AngVelArray.AddDefaulted();
+				Data.InterpParamsArray.AddDefaulted();
+				Data.AnimTracksA.AddDefaulted();
+				Data.AnimTracksB.AddDefaulted();
+				Data.UniqueIDArray.AddDefaulted();
+				Data.RelLocArray.AddDefaulted();
+				Data.RelRotArray.AddDefaulted();
+				Data.RelScaleArray.AddDefaulted();
 			}
 			else
 			{
 				Data.FreeSlotArray[NewInstanceId] = false;
 				Data.IsHiddenArray[NewInstanceId] = false;
+				Data.CoolDowns[NewInstanceId] =
+					RendererActor->PoollingCoolDown;
+			}
+
+			if (bRegisterRememberedSnapshot)
+			{
+				if (Data.bNewPredictionModel)
+				{
+					UE::FogOfWar::Private::WriteParentRelativeTransform(
+						Data,
+						NewInstanceId,
+						SlotLocation,
+						FQuat(SlotRotation),
+						SlotLocation,
+						FQuat(SlotRotation),
+						FVector(SlotScale));
+				}
+				else
+				{
+					Data.LocationArray[NewInstanceId] = SlotLocation;
+					Data.OrientationArray[NewInstanceId] = SlotRotation;
+					Data.ScaleArray[NewInstanceId] = SlotScale;
+				}
+			}
+			else if (Data.bNewPredictionModel)
+			{
+				UE::FogOfWar::Private::WriteParentRelativeTransform(
+					Data,
+					NewInstanceId,
+					Locating.Location,
+					AgentFacingRot,
+					AgentRenderLocation,
+					AgentRenderRotation,
+					AgentRenderScale);
+			}
+			else
+			{
 				Data.LocationArray[NewInstanceId] = SlotLocation;
 				Data.OrientationArray[NewInstanceId] = SlotRotation;
 				Data.ScaleArray[NewInstanceId] = SlotScale;
-				Data.DynamicParams0_Array[NewInstanceId] = SlotDynamicParams;
-				Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array[NewInstanceId] = SlotHealthBar;
-				Data.CurrentLODArray[NewInstanceId] = SlotLOD;
-				Data.StyleArray[NewInstanceId] = SlotStyle;
 			}
+			Data.DynamicParams0_Array[NewInstanceId] = SlotDynamicParams;
+			Data.HealthBar_Opacity_CurrentRatio_TargetRatio_Array[NewInstanceId] =
+				SlotHealthBar;
+			Data.CurrentLODArray[NewInstanceId] = SlotLOD;
+			Data.StyleArray[NewInstanceId] = SlotStyle;
+			Data.VelocityArray[NewInstanceId] =
+				bRegisterRememberedSnapshot
+					? FVector3f::ZeroVector
+					: Moving.CurrentVelocity;
+			Data.AngVelArray[NewInstanceId] = FVector3f::ZeroVector;
+			const FInterpParams& RegisterInterpParams = Render.InterpParams;
+			Data.InterpParamsArray[NewInstanceId] = FVector4f(
+				RegisterInterpParams.InterpSpeed,
+				RegisterInterpParams.PredictTime,
+				RegisterInterpParams.SnapDist,
+				bRegisterRememberedSnapshot
+					? 0.0f
+					: (RegisterInterpParams.IsEnabled() ? 1.0f : 0.0f));
+			Data.AnimTracksA[NewInstanceId] = FVector4f::Zero();
+			Data.AnimTracksB[NewInstanceId] = FVector4f::Zero();
+			Data.UniqueIDArray[NewInstanceId] = AgentUniqueID;
 
 			Rendering.InstanceId = NewInstanceId;
 			Rendering.RenderBatchId = RenderBatchId;
@@ -2758,9 +2985,16 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			Rendering.TargetLocation = SlotLocation;
 			Rendering.TargetRotation = SlotRotation;
 			Rendering.TargetScale = SlotScale;
+			Rendering.TargetFacingRotation = bRegisterRememberedSnapshot
+				? SlotRotation
+				: FQuat4f(AgentFacingRot);
 			Rendering.InterpLocation = Rendering.TargetLocation;
 			Rendering.InterpRotation = Rendering.TargetRotation;
 			Rendering.InterpScale = Rendering.TargetScale;
+			Rendering.CachedVelocity = bRegisterRememberedSnapshot
+				? FVector3f::ZeroVector
+				: Moving.CurrentVelocity;
+			Rendering.CachedAngularVelocity = FVector3f::ZeroVector;
 
 			Rendering.TargetFrame0 = Animating.AnimBlendResult.CurrentFrame0;
 			Rendering.TargetFrame1 = Animating.AnimBlendResult.CurrentFrame1;
@@ -2789,6 +3023,26 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			Rendering.CachedLoop0 = ActiveState->bLoop0;
 			Rendering.CachedLoop1 = ActiveState->bLoop1;
 			Rendering.CachedLoop2 = ActiveState->bLoop2;
+			const float CachedSampleRate =
+				static_cast<float>(Rendering.CachedSampleRate);
+			Data.AnimTracksA[NewInstanceId] =
+				UE::FogOfWar::Private::EncodeAnimTracksA(
+					Rendering.CachedStartFrame0,
+					Rendering.CachedEndFrame0,
+					Rendering.CachedStartFrame1,
+					Rendering.CachedEndFrame1,
+					Rendering.CachedStartFrame2,
+					Rendering.CachedEndFrame2,
+					Rendering.CachedPlayRate0 * CachedSampleRate,
+					Rendering.CachedPlayRate1 * CachedSampleRate);
+			Data.AnimTracksB[NewInstanceId] =
+				UE::FogOfWar::Private::EncodeAnimTracksB(
+					Rendering.CachedPlayRate2 * CachedSampleRate,
+					Rendering.CachedLoop0,
+					Rendering.CachedLoop1,
+					Rendering.CachedLoop2,
+					bRegisterRememberedSnapshot
+						|| Rendering.bNoFrameExtrap);
 
 			// Initialize MatFX state
 			Rendering.TargetIceFx = Animating.IceFx;
@@ -2975,6 +3229,12 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			NiagaraSystem->SetVariableBool(FName("EnableTextPop"), false);
 			NiagaraSystem->SetVariableInt(FName("SubType"), SubTypeIndex);
 			NiagaraSystem->SetVariableInt(FName("InstanceCount"), FrameCount);
+			if (bIsSimTick)
+			{
+				NiagaraSystem->SetVariableFloat(
+					FName("User.LogicTickTime"),
+					static_cast<float>(FogWorldTimeSeconds));
+			}
 			TextCount += Data.TextData.Text_Location_Array.Num();
 
 			// Warm empty components keep their CPU allocation and Niagara system,
@@ -2994,12 +3254,21 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 			if (Data.bUsePositionArray)UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayPosition(NiagaraSystem, FName("PositionArray"), Data.LocationArray);
 			if (Data.bUseStyleArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayInt32(NiagaraSystem, FName("StyleArray"), Data.StyleArray);
+			if (Data.bUseVelocityArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(NiagaraSystem, FName("VelocityArray"), Data.VelocityArray);
+			if (Data.bUseAngVelArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(NiagaraSystem, FName("AngVelArray"), Data.AngVelArray);
+			if (Data.bUseInterpParamsArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector4(NiagaraSystem, FName("InterpParamsArray"), Data.InterpParamsArray);
+			if (Data.bUseAnimTracksA) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector4(NiagaraSystem, FName("AnimTracksA"), Data.AnimTracksA);
+			if (Data.bUseAnimTracksB) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector4(NiagaraSystem, FName("AnimTracksB"), Data.AnimTracksB);
+			if (Data.bUseUniqueIDArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayInt32(NiagaraSystem, FName("UniqueIDArray"), Data.UniqueIDArray);
+			if (Data.bUseRelLocArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(NiagaraSystem, FName("RelLocArray"), Data.RelLocArray);
+			if (Data.bUseRelRotArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayQuat(NiagaraSystem, FName("RelRotArray"), Data.RelRotArray);
+			if (Data.bUseRelScaleArray) UNiagaraDataInterfaceArrayFunctionLibrary::SetNiagaraArrayVector(NiagaraSystem, FName("RelScaleArray"), Data.RelScaleArray);
 
 		}
 
 		if (TextCount > 0 && IsValid(Renderer->NDC_TextPop))
 		{
-			FMassTextPopWriter Writer;
+			FFogMassTextPopWriter Writer;
 			Writer.DebugSource = TEXT("MassBattleAgentRenderProcessor");
 
 			if (Writer.BeginWrite(GetWorld(), Renderer->NDC_TextPop->Get(), FNiagaraDataChannelSearchParameters(), TextCount, false, true, true))
@@ -3108,9 +3377,9 @@ int32 UMassBattleFogAgentRenderProcessor::AddRenderBatch(AMassBattleAgentRendere
 	System->SetVariableStaticMesh(TEXT("AgentMesh"), RendererActor->AgentMesh);
 	System->SetCastShadow(true);
 
-	// -----------------------------------------------------------------------
-	// NEW: Auto-detect if "PositionArray" exists to enable LWC Precision
-	// -----------------------------------------------------------------------
+	// Keep the external Fog renderer on the same Niagara input ABI as the
+	// current MassBattle Net renderer. Every array remains capability-gated so
+	// legacy Niagara systems continue to use the world-transform model.
 	TArray<FNiagaraVariable> UserVars;
 	System->GetOverrideParameters().GetParameters(UserVars);
 	for (const FNiagaraVariable& Var : UserVars)
@@ -3123,8 +3392,51 @@ int32 UMassBattleFogAgentRenderProcessor::AddRenderBatch(AMassBattleAgentRendere
 		{
 			NewData.bUseStyleArray = true;
 		}
+		else if (Var.GetName() == FName("User.VelocityArray"))
+		{
+			NewData.bUseVelocityArray = true;
+		}
+		else if (Var.GetName() == FName("User.AngVelArray"))
+		{
+			NewData.bUseAngVelArray = true;
+		}
+		else if (Var.GetName() == FName("User.InterpParamsArray"))
+		{
+			NewData.bUseInterpParamsArray = true;
+		}
+		else if (Var.GetName() == FName("User.AnimTracksA"))
+		{
+			NewData.bUseAnimTracksA = true;
+		}
+		else if (Var.GetName() == FName("User.AnimTracksB"))
+		{
+			NewData.bUseAnimTracksB = true;
+		}
+		else if (Var.GetName() == FName("User.UniqueIDArray"))
+		{
+			NewData.bUseUniqueIDArray = true;
+		}
+		else if (Var.GetName() == FName("User.RelLocArray"))
+		{
+			NewData.bUseRelLocArray = true;
+		}
+		else if (Var.GetName() == FName("User.RelRotArray"))
+		{
+			NewData.bUseRelRotArray = true;
+		}
+		else if (Var.GetName() == FName("User.RelScaleArray"))
+		{
+			NewData.bUseRelScaleArray = true;
+		}
+		else if (Var.GetName() == FName("User.MeshIndex_Array"))
+		{
+			NewData.bUseMeshIndexArray = true;
+		}
 	}
-	// -----------------------------------------------------------------------
+	NewData.bNewPredictionModel =
+		NewData.bUseRelLocArray
+		|| NewData.bUseRelRotArray
+		|| NewData.bUseRelScaleArray;
 
 	NewData.SpawnedNiagaraSystem = System;
 

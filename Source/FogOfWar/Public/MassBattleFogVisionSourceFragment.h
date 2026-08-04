@@ -1,4 +1,5 @@
 // Copyright Winyunq, 2025. All Rights Reserved.
+// Commercial extension: see COMMERCIAL_FEATURE_LICENSE.md.
 
 #pragma once
 

@@ -1,5 +1,6 @@
 /*
 * MassBattle renderer replacement owned by FogOfWar.
+* Winyunq commercial integration: see COMMERCIAL_FEATURE_LICENSE.md.
 *
 * Upstream source snapshot:
 *   MassBattle/Private/Processors/MassBattleAgentRenderProcessor.cpp

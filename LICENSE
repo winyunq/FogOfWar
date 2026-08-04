@@ -1,3 +1,17 @@
+LICENSE SCOPE NOTICE
+
+For FogOfWar version 2.0.0 and later, the MIT License below applies only to
+the upstream/open components of this repository. It does not apply to the
+Scene Visibility Performance Extension identified in
+COMMERCIAL_FEATURE_LICENSE.md. That extension is commercially licensed and
+all rights in Winyunq's implementation are reserved.
+
+This scope notice does not revoke or alter rights that were already granted
+under the license of an earlier release or commit.
+
+Contact winyunq@gmail.com to obtain the commercial extension or a written
+license.
+
 MIT License
 
 Copyright (c) 2024 zhmyh1337

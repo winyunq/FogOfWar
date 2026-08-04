@@ -2,16 +2,20 @@
 
 #include "UI/MassBattleFrameMinimapWidget.h"
 
+#include "Blueprint/WidgetTree.h"
 #include "Components/BoxComponent.h"
+#include "Components/Image.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "Fragments/RenderBatchData.h"
 #include "HAL/PlatformTime.h"
+#include "Minimap/MapPackageProfilePaths.h"
 #include "Minimap/MapRegion.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
-#include "Renderers/MassBattleAgentRenderer.h"
-#include "Subsystems/MassBattleSubsystem.h"
+#include "RTSSelectionSubsystem.h"
+#include "Subsystems/MassBattleFogRenderSubsystem.h"
 #include "TimerManager.h"
 #include "UI/MassBattleFrameMinimapSlate.h"
 
@@ -21,27 +25,21 @@ namespace
 	constexpr int32 TeamIdLookupSize = 1 << 10;
 	const TCHAR* MassBattleMinimapMapRegionSection = TEXT("MapRegion");
 	const TCHAR* MinimapColorSection = TEXT("MinimapUnitColors");
-
-	FString GetMapName(const UWorld* World)
-	{
-		if (!World)
-		{
-			return TEXT("Default");
-		}
-
-		FString MapName = World->GetMapName();
-		MapName.RemoveFromStart(World->StreamingLevelsPrefix);
-		return MapName.IsEmpty() ? FString(TEXT("Default")) : MapName;
-	}
+	const TCHAR* MinimapBackgroundSection = TEXT("MinimapBackground");
 
 	FString GetMapRegionPath(const UWorld* World)
 	{
-		return FPaths::ProjectConfigDir() / TEXT("MapRegion") / GetMapName(World) / TEXT("MapRegion.ini");
+		return MassBattleMapProfilePaths::GetMapRegionIniPath(World);
 	}
 
 	FString GetMinimapColorPath(const UWorld* World)
 	{
-		return FPaths::ProjectConfigDir() / TEXT("MapRegion") / GetMapName(World) / TEXT("MinimapColors.ini");
+		return MassBattleMapProfilePaths::GetMinimapColorsIniPath(World);
+	}
+
+	FString GetMinimapBackgroundPath(const UWorld* World)
+	{
+		return MassBattleMapProfilePaths::GetMinimapBackgroundIniPath(World);
 	}
 
 	bool ReadMinimapColor(const FConfigFile& IniFile, const TCHAR* Key, FLinearColor& InOutColor)
@@ -100,6 +98,7 @@ void UMassBattleFrameMinimapWidget::ReleaseSlateResources(const bool bReleaseChi
 void UMassBattleFrameMinimapWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	ApplyBaseMapTextureFromConfig();
 	InitializeMassBattleFrameMinimap();
 }
 
@@ -132,33 +131,46 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 
 	const double StartSeconds = FPlatformTime::Seconds();
 	UWorld* World = GetWorld();
-	UMassBattleSubsystem* MassBattleSubsystem = World ? World->GetSubsystem<UMassBattleSubsystem>() : nullptr;
-	if (!MassBattleSubsystem || !RenderData.IsValid())
+	UMassBattleFogRenderSubsystem* RenderFilter = World ? World->GetSubsystem<UMassBattleFogRenderSubsystem>() : nullptr;
+	if (!RenderData.IsValid() || !RenderFilter)
 	{
 		return false;
 	}
 
 	FMassBattleMinimapUploadData UploadData;
-	int32 AppendedBatchCount = 0;
 
-	// Batch-level bulk concatenation only. TArray::Append copies each contiguous block;
-	// there is no per-agent loop, projection, filtering, or repacking on the CPU.
-	for (const TPair<int32, TObjectPtr<AMassBattleAgentRenderer>>& RendererPair : MassBattleSubsystem->AgentRenderers)
+	if (bSyncViewingTeamFromRTSInput)
 	{
-		const AMassBattleAgentRenderer* Renderer = RendererPair.Value;
-		if (!IsValid(Renderer))
+		if (ULocalPlayer* LocalPlayer = World ? World->GetFirstLocalPlayerFromController() : nullptr)
 		{
-			continue;
+			if (const URTSSelectionSubsystem* SelectionSubsystem = LocalPlayer->GetSubsystem<URTSSelectionSubsystem>())
+			{
+				ViewingTeamIndex = FMath::Clamp(SelectionSubsystem->GetPlayerTeamIndex(), 0, TeamIdLookupSize - 1);
+			}
 		}
+	}
+	RenderFilter->ConfigureStandaloneMinimapTeams(ViewingTeamIndex, AlliedTeamIndices);
 
-		for (const TPair<int32, FAgentRenderBatchData>& BatchPair : Renderer->SpawnedRenderBatches)
-		{
-			const FAgentRenderBatchData& Batch = BatchPair.Value;
-			UploadData.Locations.Append(Batch.LocationArray);
-			UploadData.DynamicParams0.Append(Batch.DynamicParams0_Array);
-			UploadData.IsHidden.Append(Batch.IsHiddenArray);
-			++AppendedBatchCount;
-		}
+	int32 FriendlySourceCount = 0;
+	RenderFilter->CopyLatestMinimapSnapshot(
+		UploadData.Units,
+		FriendlySourceCount,
+		UploadData.FogVisibleMarkers);
+	UploadData.UnitCount = UploadData.Units.Num();
+	UploadData.VisionSourceCount = FMath::Clamp(FriendlySourceCount, 0, UploadData.UnitCount);
+	RenderFilter->RequestMinimapSnapshotCollection();
+
+	// Attack exposure adds only the attacking unit marker. It never writes the
+	// minimap visibility stencil and therefore cannot reveal nearby terrain/units.
+	TArray<FVector4f> AttackRevealMarkers;
+	RenderFilter->CollectAttackRevealMarkers(
+		World ? World->GetTimeSeconds() : 0.0,
+		AttackRevealMarkers);
+	UploadData.FogVisibleMarkers.Append(MoveTemp(AttackRevealMarkers));
+	const bool bSceneFogActive = RenderFilter->IsConfiguredActive();
+	if (bSceneFogActive)
+	{
+		VisionRadiusUU = RenderFilter->GetVisionRadiusUU();
 	}
 
 	const FVector MapCenter3D = MapRegionTransform.GetLocation();
@@ -169,30 +181,105 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 	UploadData.LogicalResolution = MinimapResolution;
 	UploadData.VisionRadiusUU = VisionRadiusUU;
 	UploadData.UnitRadiusUU = UnitRadiusUU;
+	// Minimap readability is independent from the stronger scene-fog treatment.
+	// Both views still consume the same visibility state; only presentation opacity differs.
 	UploadData.FogOpacity = FogDarkenOpacity;
-	UploadData.ViewingTeamIndex = static_cast<uint32>(FMath::Max(ViewingTeamIndex, 0));
-	const int32 UploadedAgentCount = FMath::Min(
-		UploadData.Locations.Num(),
-		FMath::Min(UploadData.DynamicParams0.Num(), UploadData.IsHidden.Num()));
-	const uint64 UploadBytes =
-		static_cast<uint64>(UploadData.Locations.Num()) * sizeof(FVector)
-		+ static_cast<uint64>(UploadData.DynamicParams0.Num()) * sizeof(FVector4f)
-		+ static_cast<uint64>(UploadData.IsHidden.Num()) * sizeof(bool)
-		+ static_cast<uint64>(UploadData.TeamColors.Num()) * sizeof(FLinearColor);
-
-	// Ownership of the already-merged contiguous blocks moves to the render command.
-	// The render thread performs one raw upload per array; it never asks the CPU to project agents.
+	// Ownership of the compact snapshot moves to the render command. The render
+	// thread uploads persistent buffers and performs all map projection/filtering.
 	RenderData->Upload_GameThread(MoveTemp(UploadData));
 
 	LastPerfStats.CpuAgentTraversalCount = 0;
 	LastPerfStats.ParameterPushMs = static_cast<float>((FPlatformTime::Seconds() - StartSeconds) * 1000.0);
-	UE_LOG(LogTemp, Display,
-		TEXT("MassBattleMinimapPerf GT: Agents=%d Batches=%d BulkMergeAndSchedule=%.3fms UploadBytes=%llu"),
-		UploadedAgentCount,
-		AppendedBatchCount,
-		LastPerfStats.ParameterPushMs,
-		static_cast<unsigned long long>(UploadBytes));
 	return true;
+}
+
+void UMassBattleFrameMinimapWidget::ApplyBaseMapTextureFromConfig()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UWidgetTree* ParentTree = GetTypedOuter<UWidgetTree>();
+	UUserWidget* ParentWidget = ParentTree
+		? Cast<UUserWidget>(ParentTree->GetOuter())
+		: nullptr;
+	if (!ParentWidget || !ParentWidget->WidgetTree)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("MassBattle minimap: cannot resolve the owning widget tree for [%s]."),
+			*MassBattleMapProfilePaths::GetCanonicalMapPackagePath(World));
+		return;
+	}
+
+	UImage* BaseMapImage = ParentWidget->WidgetTree->FindWidget<UImage>(TEXT("ImageBaseMap"));
+	if (!BaseMapImage)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("MassBattle minimap: owning widget has no ImageBaseMap for [%s]."),
+			*MassBattleMapProfilePaths::GetCanonicalMapPackagePath(World));
+		return;
+	}
+
+	// The designer brush is only a preview/default. Clear it before resolving the
+	// exact-map profile so a map with no background never inherits another
+	// theater's texture.
+	BaseMapImage->SetBrushFromTexture(nullptr, false);
+
+	const FString IniPath = GetMinimapBackgroundPath(World);
+	if (!FPaths::FileExists(IniPath))
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("MassBattle minimap: exact map [%s] has no background profile; background cleared. Expected [%s]."),
+			*MassBattleMapProfilePaths::GetCanonicalMapPackagePath(World),
+			*IniPath);
+		return;
+	}
+
+	FConfigFile IniFile;
+	IniFile.Read(IniPath);
+	const FString CanonicalMapPath =
+		MassBattleMapProfilePaths::GetCanonicalMapPackagePath(World);
+	FString ProfileMapPath;
+	if (!IniFile.GetString(
+			MinimapBackgroundSection,
+			TEXT("MapPackagePath"),
+			ProfileMapPath)
+		|| !ProfileMapPath.Equals(CanonicalMapPath, ESearchCase::IgnoreCase))
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("MassBattle minimap: profile [%s] does not declare exact map [%s]; refusing cross-map background fallback."),
+			*IniPath,
+			*CanonicalMapPath);
+		return;
+	}
+
+	FString TexturePath;
+	if (!IniFile.GetString(
+			MinimapBackgroundSection,
+			TEXT("Texture"),
+			TexturePath)
+		|| TexturePath.IsEmpty())
+	{
+		return;
+	}
+
+	UTexture2D* BaseMapTexture = Cast<UTexture2D>(FSoftObjectPath(TexturePath).TryLoad());
+	if (!BaseMapTexture)
+	{
+		UE_LOG(LogTemp, Error,
+			TEXT("MassBattle minimap: failed to load background texture [%s] for [%s]."),
+			*TexturePath,
+			*CanonicalMapPath);
+		return;
+	}
+
+	BaseMapImage->SetBrushFromTexture(BaseMapTexture, false);
+	UE_LOG(LogTemp, Log,
+		TEXT("MassBattle minimap: bound exact map [%s] to background [%s]."),
+		*CanonicalMapPath,
+		*TexturePath);
 }
 
 void UMassBattleFrameMinimapWidget::LoadTeamColorsFromConfig()
@@ -270,6 +357,16 @@ void UMassBattleFrameMinimapWidget::SetUnitRadiusUU(const float InRadiusUU)
 void UMassBattleFrameMinimapWidget::SetViewingTeamIndex(const int32 InTeamIndex)
 {
 	ViewingTeamIndex = FMath::Clamp(InTeamIndex, 0, TeamIdLookupSize - 1);
+	PushMassBattleFrameMinimapFrame();
+}
+
+void UMassBattleFrameMinimapWidget::SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices)
+{
+	AlliedTeamIndices.Reset(InAlliedTeamIndices.Num());
+	for (const int32 TeamIndex : InAlliedTeamIndices)
+	{
+		AlliedTeamIndices.AddUnique(FMath::Clamp(TeamIndex, 0, TeamIdLookupSize - 1));
+	}
 	PushMassBattleFrameMinimapFrame();
 }
 

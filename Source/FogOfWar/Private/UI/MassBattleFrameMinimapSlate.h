@@ -7,21 +7,21 @@
 #include "Rendering/RenderingCommon.h"
 #include "Widgets/SLeafWidget.h"
 
-struct FMassBattleMinimapGpuTimingState;
-
 struct FMassBattleMinimapUploadData
 {
-	TArray<FVector> Locations;
-	TArray<FVector4f> DynamicParams0;
-	TArray<bool> IsHidden;
+	/** float XYZ plus bit-cast uint Team in W; actual friendly/allied vision providers form a prefix. */
+	TArray<FVector4f> Units;
+	/** Fog-visible unit-only markers: attacks, permanent units, and remembered buildings. */
+	TArray<FVector4f> FogVisibleMarkers;
 	TArray<FLinearColor> TeamColors;
 	FVector2f MapMin = FVector2f::ZeroVector;
 	FVector2f MapSize = FVector2f(1.0f, 1.0f);
 	int32 LogicalResolution = 256;
 	float VisionRadiusUU = 4000.0f;
 	float UnitRadiusUU = 100.0f;
-	float FogOpacity = 0.5f;
-	uint32 ViewingTeamIndex = 0;
+	float FogOpacity = 0.3f;
+	int32 UnitCount = 0;
+	int32 VisionSourceCount = 0;
 };
 
 /** Persistent read-only GPU buffers. They are replaced only at the minimap update cadence. */
@@ -29,6 +29,7 @@ class FMassBattleMinimapRenderData final
 	: public TSharedFromThis<FMassBattleMinimapRenderData, ESPMode::ThreadSafe>
 {
 public:
+	FMassBattleMinimapRenderData();
 	~FMassBattleMinimapRenderData();
 
 	void Upload_GameThread(FMassBattleMinimapUploadData&& UploadData);
@@ -42,9 +43,8 @@ private:
 	void Upload_RenderThread(FRHICommandListImmediate& RHICmdList, const FMassBattleMinimapUploadData& UploadData);
 	void Release_RenderThread();
 
-	FReadBuffer LocationWordsBuffer;
-	FReadBuffer DynamicParams0Buffer;
-	FReadBuffer IsHiddenBuffer;
+	FReadBuffer UnitDataBuffer;
+	FReadBuffer FogVisibleBuffer;
 	FReadBuffer TeamColorsBuffer;
 
 	FVector2f MapMin_RenderThread = FVector2f::ZeroVector;
@@ -52,11 +52,11 @@ private:
 	uint32 LogicalResolution_RenderThread = 256;
 	float VisionRadiusUU_RenderThread = 4000.0f;
 	float UnitRadiusUU_RenderThread = 100.0f;
-	float FogOpacity_RenderThread = 0.5f;
-	uint32 ViewingTeamIndex_RenderThread = 0;
+	float FogOpacity_RenderThread = 0.3f;
 	uint32 AgentCount_RenderThread = 0;
+	uint32 VisionSourceCount_RenderThread = 0;
+	uint32 FogVisibleCount_RenderThread = 0;
 	uint32 TeamColorCount_RenderThread = 0;
-	TUniquePtr<FMassBattleMinimapGpuTimingState> GpuTimingState;
 };
 
 using FMassBattleMinimapRenderDataPtr = TSharedPtr<FMassBattleMinimapRenderData, ESPMode::ThreadSafe>;

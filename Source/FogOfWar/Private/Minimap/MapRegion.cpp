@@ -2,37 +2,23 @@
 
 #include "Engine/World.h"
 #include "HAL/FileManager.h"
+#include "Minimap/MapPackageProfilePaths.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 
 namespace
 {
-	const TCHAR* MapRegionDirectoryName = TEXT("MapRegion");
-	const TCHAR* MapRegionFileName = TEXT("MapRegion.ini");
 	const TCHAR* MapRegionSectionName = TEXT("MapRegion");
-	const TCHAR* MinimapColorsFileName = TEXT("MinimapColors.ini");
 	const TCHAR* MinimapColorsSectionName = TEXT("MinimapUnitColors");
-
-	FString GetCleanMapName(const UWorld* World)
-	{
-		if (!World)
-		{
-			return TEXT("Default");
-		}
-
-		FString MapName = World->GetMapName();
-		MapName.RemoveFromStart(World->StreamingLevelsPrefix);
-		return MapName.IsEmpty() ? FString(TEXT("Default")) : MapName;
-	}
 
 	FString GetMapRegionIniPath(const UWorld* World)
 	{
-		return FPaths::ProjectConfigDir() / MapRegionDirectoryName / GetCleanMapName(World) / MapRegionFileName;
+		return MassBattleMapProfilePaths::GetMapRegionIniPath(World);
 	}
 
 	FString GetMinimapColorsIniPath(const UWorld* World)
 	{
-		return FPaths::ProjectConfigDir() / MapRegionDirectoryName / GetCleanMapName(World) / MinimapColorsFileName;
+		return MassBattleMapProfilePaths::GetMinimapColorsIniPath(World);
 	}
 
 	void SetMinimapColor(FConfigFile& IniFile, const FString& SectionName, const TCHAR* Key, const FLinearColor& Color)

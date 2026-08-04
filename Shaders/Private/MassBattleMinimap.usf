@@ -2,9 +2,8 @@
 
 // Mass Battle Frame minimap. All per-agent projection, sizing and filtering stays on GPU.
 
-Buffer<uint> LocationWords;
-Buffer<float4> DynamicParams0;
-Buffer<uint> IsHidden;
+Buffer<float4> UnitData;
+Buffer<float4> VisionSources;
 Buffer<float4> TeamColors;
 
 float2 RectMin;
@@ -14,8 +13,8 @@ float2 MapMin;
 float2 MapSize;
 uint LogicalResolution;
 float UnitRadiusUU;
+float UnitBrightness;
 float VisionRadiusUU;
-uint ViewingTeamIndex;
 uint TeamColorCount;
 float FogOpacity;
 
@@ -36,29 +35,6 @@ static const float2 QuadCorners[6] =
 	float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),
 	float2(0.0, 1.0), float2(1.0, 0.0), float2(1.0, 1.0)
 };
-
-float DoubleWordsToFloat(uint LowWord, uint HighWord)
-{
-	const uint Exponent = (HighWord >> 20u) & 0x7ffu;
-	if (Exponent == 0u)
-	{
-		return 0.0;
-	}
-
-	const float Sign = (HighWord & 0x80000000u) != 0u ? -1.0 : 1.0;
-	const float Mantissa = 1.0
-		+ float(HighWord & 0x000fffffu) * (1.0 / 1048576.0)
-		+ float(LowWord) * (1.0 / 4503599627370496.0);
-	return Sign * exp2(float(int(Exponent) - 1023)) * Mantissa;
-}
-
-float2 LoadWorldXY(uint AgentIndex)
-{
-	const uint WordOffset = AgentIndex * 6u;
-	return float2(
-		DoubleWordsToFloat(LocationWords[WordOffset + 0u], LocationWords[WordOffset + 1u]),
-		DoubleWordsToFloat(LocationWords[WordOffset + 2u], LocationWords[WordOffset + 3u]));
-}
 
 float4 PixelToClip(float2 PixelPosition)
 {
@@ -98,13 +74,15 @@ float2 RoundedParticleDiameterPixels(float RadiusUU)
 FUnitVSToPS UnitVS(uint VertexID : SV_VertexID, uint InstanceID : SV_InstanceID)
 {
 	FUnitVSToPS Output;
-	const uint TeamID = asuint(DynamicParams0[InstanceID].w) & 1023u;
-	const bool bValid = IsHidden[InstanceID] == 0u && TeamID < TeamColorCount;
-	const float2 CenterPixel = WorldToWidgetPixel(LoadWorldXY(InstanceID));
+	const float4 Unit = UnitData[InstanceID];
+	const uint TeamID = asuint(Unit.w) & 1023u;
+	const bool bValid = TeamID < TeamColorCount;
+	const float2 CenterPixel = WorldToWidgetPixel(Unit.xy);
 	const float2 DiameterPixels = RoundedParticleDiameterPixels(UnitRadiusUU);
 	const float2 PixelPosition = CenterPixel + (QuadCorners[VertexID] - 0.5) * DiameterPixels;
 	Output.Position = bValid ? PixelToClip(PixelPosition) : float4(-2.0, -2.0, 0.0, 1.0);
 	Output.Color = bValid ? TeamColors[TeamID] : 0.0.xxxx;
+	Output.Color.rgb *= UnitBrightness;
 	return Output;
 }
 
@@ -116,14 +94,10 @@ float4 UnitPS(FUnitVSToPS Input) : SV_Target0
 FVisionVSToPS VisionVS(uint VertexID : SV_VertexID, uint InstanceID : SV_InstanceID)
 {
 	FVisionVSToPS Output;
-	const uint TeamID = asuint(DynamicParams0[InstanceID].w) & 1023u;
-	// Conservative default: only the viewing team shares vision. Allied-team
-	// relationships require an explicit future input and are not guessed here.
-	const bool bValid = IsHidden[InstanceID] == 0u && TeamID == ViewingTeamIndex;
-	const float2 CenterPixel = WorldToWidgetPixel(LoadWorldXY(InstanceID));
+	const float2 CenterPixel = WorldToWidgetPixel(VisionSources[InstanceID].xy);
 	const float2 DiameterPixels = RoundedParticleDiameterPixels(VisionRadiusUU);
 	const float2 PixelPosition = CenterPixel + (QuadCorners[VertexID] - 0.5) * DiameterPixels;
-	Output.Position = bValid ? PixelToClip(PixelPosition) : float4(-2.0, -2.0, 0.0, 1.0);
+	Output.Position = PixelToClip(PixelPosition);
 	Output.CircleUV = QuadCorners[VertexID] * 2.0 - 1.0;
 	return Output;
 }

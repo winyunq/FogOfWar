@@ -1,4 +1,5 @@
 // Copyright Winyunq, 2025. All Rights Reserved.
+// Commercial extension: see COMMERCIAL_FEATURE_LICENSE.md.
 
 #include "MassBattleFrameFogSceneViewExtension.h"
 
@@ -122,9 +123,9 @@ namespace
 		SHADER_USE_PARAMETER_STRUCT(FMassBattleFrameFogCompositeVS, FGlobalShader);
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-			SHADER_PARAMETER(FVector2f, OutputExtent)
-			SHADER_PARAMETER(FVector2f, ViewRectMin)
-			SHADER_PARAMETER(FVector2f, ViewRectSize)
+			SHADER_PARAMETER(FVector2f, InputExtent)
+			SHADER_PARAMETER(FVector2f, InputViewRectMin)
+			SHADER_PARAMETER(FVector2f, InputViewRectSize)
 		END_SHADER_PARAMETER_STRUCT()
 
 		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -140,7 +141,6 @@ namespace
 		SHADER_USE_PARAMETER_STRUCT(FMassBattleFrameFogCompositePS, FGlobalShader);
 
 		BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
-			SHADER_PARAMETER(FVector2f, OutputExtent)
 			SHADER_PARAMETER(float, FogOpacity)
 			SHADER_PARAMETER(uint32, Debug)
 			SHADER_PARAMETER(uint32, DebugRevealAll)
@@ -490,24 +490,34 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 	const FPostProcessMaterialInputs& Inputs)
 {
 	const FScreenPassTextureSlice SceneColorSlice = Inputs.GetInput(EPostProcessMaterialInput::SceneColor);
-	if (!SceneColorSlice.IsValid() || !bEnabled_RenderThread || bDebugRevealAll_RenderThread)
+	if (!SceneColorSlice.IsValid())
 	{
-		return FScreenPassTexture(SceneColorSlice);
+		return FScreenPassTexture();
+	}
+	if (!bEnabled_RenderThread || bDebugRevealAll_RenderThread)
+	{
+		return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
 	}
 
-	const FScreenPassTexture SceneColor(SceneColorSlice);
+	// A post-process input can be an array slice (for example in stereo/TSR).
+	// CopyFromSlice is a no-copy conversion for an ordinary Texture2D and the
+	// required safe copy for every other case.
+	const FScreenPassTexture SceneColor = FScreenPassTexture::CopyFromSlice(
+		GraphBuilder,
+		SceneColorSlice);
+	if (!SceneColor.IsValid())
+	{
+		return Inputs.ReturnUntouchedSceneColorForPostProcessing(GraphBuilder);
+	}
+
 	FScreenPassRenderTarget Output = Inputs.OverrideOutput;
 	if (!Output.IsValid())
 	{
 		Output = FScreenPassRenderTarget::CreateFromInput(
 			GraphBuilder,
 			SceneColor,
-			ERenderTargetLoadAction::ENoAction,
+			View.GetOverwriteLoadAction(),
 			TEXT("MassBattleFrameFog.SceneColor"));
-	}
-	else
-	{
-		AddDrawTexturePass(GraphBuilder, View, SceneColorSlice, Output);
 	}
 
 	const FIntPoint Extent = SceneColor.Texture->Desc.Extent;
@@ -518,7 +528,8 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 		TexCreate_RenderTargetable | TexCreate_ShaderResource);
 	FRDGTextureRef VisibilityMask = GraphBuilder.CreateTexture(MaskDesc, TEXT("MassBattleFrameFog.VisibilityMask"));
 
-	const FIntRect ViewRect = SceneColor.ViewRect;
+	const FIntRect InputViewRect = SceneColor.ViewRect;
+	const FIntRect OutputViewRect = Output.ViewRect;
 	const bool bCanDrawVision = SourceCount_RenderThread > 0
 		&& VisionSourcePositionBuffer.SRV.IsValid();
 	if (bCanDrawVision)
@@ -547,7 +558,7 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 			RDG_EVENT_NAME("MassBattleFrameFog.SceneVisualCircles(%u)", InstanceCount),
 			VisionPass,
 			ERDGPassFlags::Raster,
-			[VisionPass, VertexShader, PixelShader, ViewRect, InstanceCount](FRDGAsyncTask, FRHICommandList& RHICmdList)
+			[VisionPass, VertexShader, PixelShader, InputViewRect, InstanceCount](FRDGAsyncTask, FRHICommandList& RHICmdList)
 			{
 				FGraphicsPipelineStateInitializer PSO;
 				ConfigurePipeline(RHICmdList, PSO, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
@@ -558,8 +569,19 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 				SetGraphicsPipelineState(RHICmdList, PSO, 0);
 				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VisionPass->VSParameters);
 				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), VisionPass->PSParameters);
-				RHICmdList.SetViewport(ViewRect.Min.X, ViewRect.Min.Y, 0.0f, ViewRect.Max.X, ViewRect.Max.Y, 1.0f);
-				RHICmdList.SetScissorRect(true, ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Max.X, ViewRect.Max.Y);
+				RHICmdList.SetViewport(
+					InputViewRect.Min.X,
+					InputViewRect.Min.Y,
+					0.0f,
+					InputViewRect.Max.X,
+					InputViewRect.Max.Y,
+					1.0f);
+				RHICmdList.SetScissorRect(
+					true,
+					InputViewRect.Min.X,
+					InputViewRect.Min.Y,
+					InputViewRect.Max.X,
+					InputViewRect.Max.Y);
 				RHICmdList.SetStreamSource(0, nullptr, 0);
 				RHICmdList.DrawPrimitive(0, 2, InstanceCount);
 				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
@@ -573,11 +595,10 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 	FCompositePassParameters* CompositePass = GraphBuilder.AllocParameters<FCompositePassParameters>();
 	CompositePass->RenderTargets[0] = Output.GetRenderTargetBinding();
 	FMassBattleFrameFogCompositeVS::FParameters CompositeVS;
-	CompositeVS.OutputExtent = FVector2f(Extent.X, Extent.Y);
-	CompositeVS.ViewRectMin = FVector2f(ViewRect.Min.X, ViewRect.Min.Y);
-	CompositeVS.ViewRectSize = FVector2f(ViewRect.Width(), ViewRect.Height());
+	CompositeVS.InputExtent = FVector2f(Extent.X, Extent.Y);
+	CompositeVS.InputViewRectMin = FVector2f(InputViewRect.Min.X, InputViewRect.Min.Y);
+	CompositeVS.InputViewRectSize = FVector2f(InputViewRect.Width(), InputViewRect.Height());
 	FMassBattleFrameFogCompositePS::FParameters CompositePS;
-	CompositePS.OutputExtent = FVector2f(Extent.X, Extent.Y);
 	CompositePS.FogOpacity = FogOpacity_RenderThread;
 	CompositePS.Debug = bDebug_RenderThread ? 1u : 0u;
 	CompositePS.DebugRevealAll = 0u;
@@ -594,7 +615,7 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 		RDG_EVENT_NAME("MassBattleFrameFog.Composite"),
 		CompositePass,
 		ERDGPassFlags::Raster,
-		[CompositePass, VertexShader, PixelShader, ViewRect](FRDGAsyncTask, FRHICommandList& RHICmdList)
+		[CompositePass, VertexShader, PixelShader, OutputViewRect](FRDGAsyncTask, FRHICommandList& RHICmdList)
 		{
 			FGraphicsPipelineStateInitializer PSO;
 			ConfigurePipeline(RHICmdList, PSO, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
@@ -603,8 +624,19 @@ FScreenPassTexture FMassBattleFrameFogSceneViewExtension::PostProcessPass_Render
 			SetGraphicsPipelineState(RHICmdList, PSO, 0);
 			SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), CompositePass->VSParameters);
 			SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), CompositePass->PSParameters);
-			RHICmdList.SetViewport(ViewRect.Min.X, ViewRect.Min.Y, 0.0f, ViewRect.Max.X, ViewRect.Max.Y, 1.0f);
-			RHICmdList.SetScissorRect(true, ViewRect.Min.X, ViewRect.Min.Y, ViewRect.Max.X, ViewRect.Max.Y);
+			RHICmdList.SetViewport(
+				OutputViewRect.Min.X,
+				OutputViewRect.Min.Y,
+				0.0f,
+				OutputViewRect.Max.X,
+				OutputViewRect.Max.Y,
+				1.0f);
+			RHICmdList.SetScissorRect(
+				true,
+				OutputViewRect.Min.X,
+				OutputViewRect.Min.Y,
+				OutputViewRect.Max.X,
+				OutputViewRect.Max.Y);
 			RHICmdList.SetStreamSource(0, nullptr, 0);
 			RHICmdList.DrawPrimitive(0, 2, 1);
 			RHICmdList.SetScissorRect(false, 0, 0, 0, 0);

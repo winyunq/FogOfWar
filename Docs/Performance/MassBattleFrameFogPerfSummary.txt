@@ -1,12 +1,132 @@
-MassBattleFrame fog performance analysis
-Fog CPU records: 42
-Fog GPU records: 0
-Minimap GPU reference records: 1
-Fog source counts: 0, 16, 2689, 5350, 8021, 10687, 13356, 16027, 18691, 21366, 24032, 26686, 29352
-Fog push average: 0.125 ms
-Fog push maximum: 0.421 ms
-Fog array upload average: 0.124 ms
-Fog array upload maximum: 0.420 ms
-Least-squares Fog push slope: 0.0105 microseconds/source
-Least-squares Fog array slope: 0.0105 microseconds/source
-Minimap GPU values are reference measurements and are not included in the scene-fog total.
+MassBattleFrame fog performance acceptance
+
+Old 9,944-unit and 29,352-source numbers measured obsolete pipelines and are
+not valid evidence for the current implementation.
+
+Current invariants:
+
+0. FogOfWar injects processor ownership before CDO construction and audits the
+   frozen Mass phase list. A failed audit is fatal; there is no runtime
+   ownership switch or dual-writer mode.
+1. FogOfWar replaces only MBF's Agent Render processor without modifying MBF;
+   MBF has no ISKM processor to replace. Fresh final-mask revisions maintain
+   stable proxies and ActiveProxyIds. Render and simulation sub-frames both
+   execute the heavy presentation query only for an Active Mass entity
+   collection. Combat and movement simulation remain owned by MBF's logical
+   processors.
+2. A source request and the matching final-mask revision share one refresh.
+   World-scale source collection uses one narrow, contiguous Mass query that
+   also admits visible units; camera-only refreshes use the occupied HashGrid.
+   There is no source-only or second spatial traversal.
+3. One compact source buffer is uploaded at 24 Hz and shared by two binary,
+   blend-disabled GPU draws. The high-resolution PF_G8 visual mask uses exact
+   source positions/radii at 24 Hz. The HashGrid-aligned PF_G8 logic mask keeps
+   the existing exact radius and only changes its cadence to 3 Hz; it writes
+   0=hidden or 3=true vision. There is no second CPU traversal or source upload.
+4. Scene display projects the cached visual mask with exactly one instance and
+   performs one SceneColor composite per render frame. It never redraws source
+   circles per render frame, so the ordinary render-frame cost is independent
+   of source count. There is no Landscape/decal/material path.
+5. Only the 3 Hz logic mask drives an asynchronous readback. At most one staging
+   copy may be in flight; no readback backlog is allowed.
+6. Deep-fog, state-1 and camera-external units are absent from all effective
+   presentation submissions. They write no hidden VAT prewarm element and create
+   no Actor or ISKM instance. Only final state-2/3 units enter a backend.
+7. Attack exposure and AlwaysFogVisible upgrade one unit to state 2 only; they
+   never mutate the terrain texture or reveal nearby units.
+8. RememberLastSeen stores a building payload only while it is in state 3.
+   Particle VAT can replay that frozen payload in state 2. Actor and ISKM
+   stay hidden because no frozen backend exists yet; they never read live hidden
+   state.
+9. The 3 Hz all-world minimap snapshot uses a separate, low-frequency read-only
+   query. It does not route N agents through LOD, VAT animation, interpolation
+   or Niagara packing.
+   Vision providers form a prefix; fog-visible policy/attack markers use a
+   separate dark-marker GPU batch and never touch the vision stencil.
+10. ProxyPool and FVisualizing interpolation state remain stable. InstanceId is
+    a per-frame dense destination; heavy arrays are written once at their final
+    location, retain Capacity, and are never produced sparsely then compressed.
+    UE::Mass::FEntityCollection caches the Active handles and version-checks its
+    archetype ranges; it rebuilds only on membership or entity-order changes.
+    Stable frames do not rewrite the handle list. The Particle dense layout is
+    cached per subtype and rebuilt only for membership/renderer changes or after
+    a simulation-tick representation transition. Ordinary render frames perform
+    no per-proxy FVisualizing discovery or slot-remapping pass.
+11. FogOfWar's processor takes the original FrameEnd name/order. With no active
+    scene Fog actor it delegates directly to MassBattleFrame's real Execute;
+    a placed actor always activates the new path. Missing prerequisites are
+    fatal rather than falling back to a full population. Its VAT/Actor query
+    excludes ISKM archetypes and runs only for the final visible collection.
+    VAT consumes dense arrays and Actor uses delta-sized spawn/recycle commands.
+12. ISKM is not an original MassBattleFrame processor and is not embedded in
+    FogOfWar. The independent MassBattleISKM plugin owns a minimal semantic-state
+    processor and a submission backend. Both consume Fog's one shared final-visible
+    FEntityCollection when filtering is active and use their own unfiltered query
+    otherwise. Fog's VAT query excludes ISKM at archetype matching time. There is
+    no legacy processor, fallback, compatibility scan, or dual backend. Renderer
+    cleanup scans only the dense live-instance list, never historic slot capacity.
+13. CSV stats FogMassBattleRender/ActiveProxies, ActiveHandleListRebuilt,
+    WorkSetRefresh, FullWorkSetConvergence, SpatialCandidates,
+    FogVisibilityTests, UploadedElements and MinimapSnapshotAgents make the VAT
+    complexity boundary observable.
+    MassBattleISKMAddon/StateEntityVisits, EntityVisits and
+    ExternalVisibilityWorkSet expose the independent ISKM boundary.
+    UploadedElements and ISKM EntityVisits must track visible work, not total N
+    or historic S; the separate MinimapSnapshotAgents count is allowed to track
+    total N only at its 3 Hz request rate.
+
+Required target-map capture:
+
+- total active Agent population;
+- camera-window candidates;
+- deep-fog rejected count;
+- state-1 rejected count, if a layout handoff occurs;
+- unit-local fog-visible exceptions and true-visible counts;
+- remembered/permanent/attack exception counts;
+- final Niagara elements and upload bytes per subtype;
+- ISKM candidates, state visits, active instances, transform/custom-data submissions
+  and skips;
+- Actor spawn/recycle commands;
+- UMassBattleFogAgentRenderProcessor CPU time;
+- 24 Hz source collection count and CPU time;
+- visual-mask and logic-mask dimensions/readback bytes;
+- SceneVisualMask and LogicMask GPU time (both circle draws must have Blend disabled);
+- screen VisionMask and SceneColor Composite GPU cost;
+- 3 Hz minimap VisionStencil, Fog, FogVisibleUnits and VisibleUnits GPU time;
+- MBF Niagara GPU time;
+- FogUpdateRateHz, AgentCellSize, vision radius, viewing team and allies.
+
+2026-07-21 validation (current zero-fallback revision):
+
+- UE 5.8 FogOfWar module compile: succeeded.
+- The standard WinyunqEditor FogOfWar, MassBattleISKM and MassBattleISKMEditor
+  modules compiled and linked successfully.
+- A full-RHI cold startup completed engine initialization and reported
+  "Mass render pipeline audit passed". The audit requires original Agent Render
+  absent and Fog Agent Render present; failure is fatal.
+- Eight level actors and the RTS UI class reference were migrated to the sole
+  BP_MassBattleFrameFogOfWar class. AFogOfWar, BP_FogOfWar,
+  BP_FogOfWar_DynamicallyActivated and MassBattleFogOfWar were deleted, and a
+  project-wide serialized-reference scan found no remaining references.
+- The active path now has no full-Agent fallback, source-only spatial scan,
+  duplicate attack-reveal set, per-frame renderer-map copy, optional force-visible
+  branch, or dynamically disabled scene actor. Attack observations are produced
+  on logical ticks; expiration pruning happens only when a work-set refresh will
+  consume it.
+- Fog-hidden candidates stop before presentation fragments. Hidden units create
+  no VAT prewarm, Actor instance or ISKM instance; the VAT and both ISKM stages
+  consume the same final-visible collection.
+- Landscape/decal/MPC receiver code and assets removed; the EastAsia material
+  restored to its original three-expression graph and Custom->Emissive wiring.
+- GameMap_WarSimulator1 controlled 600-frame CSV captures validate the asymmetric
+  visibility schedule at 30 benchmark fps: WorkSetRefresh=0.5/frame (15 Hz) and
+  FullWorkSetConvergence=0.1/frame (3 Hz). New visibility is admitted on a fresh
+  mask revision; a failed-visibility observation starts a >=1/3 s removal delay.
+- On the steady final 100-frame window, the active-Fog path versus DestroyAll
+  MassBattleFrameFogOfWar was: FrameTime -8.61%, GameThreadTime -9.43%, GPUTime
+  -5.00%, DrawCalls -14.16%. FogVisibilityTests averaged 1,699 versus the former
+  2,828 (about -40%). The no-actor CSV contained no FogMassBattleRender columns,
+  proving that it delegated to MassBattleFrame's original processor.
+- Cold registration still makes short/full-window comparisons noisier than the
+  steady result. An interactive camera/fog-edge acceptance pass plus Insights
+  and GPU profiling remain required before claiming the hardware-wide maximum.

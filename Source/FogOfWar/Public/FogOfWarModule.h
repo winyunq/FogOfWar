@@ -1,4 +1,5 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
+// Winyunq commercial integration: see COMMERCIAL_FEATURE_LICENSE.md.
 
 #pragma once
 

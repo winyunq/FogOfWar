@@ -1,3 +1,6 @@
+// Commercial extension — not covered by the repository MIT License.
+// See COMMERCIAL_FEATURE_LICENSE.md or contact winyunq@gmail.com.
+
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/Common.ush"
 
@@ -9,9 +12,9 @@ float SceneProjectionPlaneZ;
 float2 WorldMaskMin;
 float2 WorldMaskSize;
 float VisibilityStateValue;
-float2 OutputExtent;
-float2 ViewRectMin;
-float2 ViewRectSize;
+float2 InputExtent;
+float2 InputViewRectMin;
+float2 InputViewRectSize;
 float FogOpacity;
 uint Debug;
 uint DebugRevealAll;
@@ -93,12 +96,17 @@ struct FCompositeVSToPS
 FCompositeVSToPS CompositeVS(uint VertexID : SV_VertexID)
 {
 	FCompositeVSToPS Output;
-	const float2 Pixel = ViewRectMin + QuadCorners[VertexID] * ViewRectSize;
+	const float2 ViewportUV = QuadCorners[VertexID];
+	const float2 InputPixel = InputViewRectMin + ViewportUV * InputViewRectSize;
+
+	// SV_Position is mapped through the RHI viewport. Emit a full viewport quad
+	// here; applying the pooled texture extent as an additional scale leaves an
+	// unwritten strip on the right and bottom whenever ViewRect != Extent.
 	Output.Position = float4(
-		Pixel / OutputExtent * float2(2.0, -2.0) + float2(-1.0, 1.0),
+		ViewportUV * float2(2.0, -2.0) + float2(-1.0, 1.0),
 		0.0,
 		1.0);
-	Output.SceneUV = Pixel / OutputExtent;
+	Output.SceneUV = InputPixel / InputExtent;
 	Output.MaskUV = Output.SceneUV;
 	return Output;
 }

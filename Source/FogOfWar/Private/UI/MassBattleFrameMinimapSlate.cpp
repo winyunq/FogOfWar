@@ -31,10 +31,9 @@ namespace
 			SHADER_PARAMETER(FVector2f, MapSize)
 			SHADER_PARAMETER(uint32, LogicalResolution)
 			SHADER_PARAMETER(float, UnitRadiusUU)
+			SHADER_PARAMETER(float, UnitBrightness)
 			SHADER_PARAMETER(uint32, TeamColorCount)
-			SHADER_PARAMETER_SRV(Buffer<uint>, LocationWords)
-			SHADER_PARAMETER_SRV(Buffer<float4>, DynamicParams0)
-			SHADER_PARAMETER_SRV(Buffer<uint>, IsHidden)
+			SHADER_PARAMETER_SRV(Buffer<float4>, UnitData)
 			SHADER_PARAMETER_SRV(Buffer<float4>, TeamColors)
 		END_SHADER_PARAMETER_STRUCT()
 
@@ -74,10 +73,7 @@ namespace
 			SHADER_PARAMETER(FVector2f, MapSize)
 			SHADER_PARAMETER(uint32, LogicalResolution)
 			SHADER_PARAMETER(float, VisionRadiusUU)
-			SHADER_PARAMETER(uint32, ViewingTeamIndex)
-			SHADER_PARAMETER_SRV(Buffer<uint>, LocationWords)
-			SHADER_PARAMETER_SRV(Buffer<float4>, DynamicParams0)
-			SHADER_PARAMETER_SRV(Buffer<uint>, IsHidden)
+			SHADER_PARAMETER_SRV(Buffer<float4>, VisionSources)
 		END_SHADER_PARAMETER_STRUCT()
 
 		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
@@ -157,23 +153,27 @@ namespace
 		const void* SourceData,
 		const uint32 SourceBytes)
 	{
-		OutBuffer.Release();
 		if (NumElements == 0 || SourceBytes == 0 || SourceData == nullptr)
 		{
 			return;
 		}
 
-		OutBuffer.InitializeWithData(
-			RHICmdList,
-			DebugName,
-			BytesPerElement,
-			NumElements,
-			Format,
-			BUF_Static,
-			[SourceData, SourceBytes](FRHIBufferInitializer& Initializer)
-			{
-				Initializer.WriteData(SourceData, SourceBytes);
-			});
+		const uint32 RequiredBytes = BytesPerElement * NumElements;
+		if (!OutBuffer.Buffer.IsValid() || OutBuffer.NumBytes < RequiredBytes)
+		{
+			OutBuffer.Release();
+			OutBuffer.Initialize(
+				RHICmdList,
+				DebugName,
+				BytesPerElement,
+				FMath::RoundUpToPowerOfTwo(NumElements),
+				Format,
+				BUF_Dynamic);
+		}
+
+		void* Destination = RHICmdList.LockBuffer(OutBuffer.Buffer, 0, SourceBytes, RLM_WriteOnly);
+		FMemory::Memcpy(Destination, SourceData, SourceBytes);
+		RHICmdList.UnlockBuffer(OutBuffer.Buffer);
 	}
 
 	FIntRect GetWidgetRect(
@@ -260,196 +260,7 @@ namespace
 	};
 }
 
-struct FMassBattleMinimapGpuTimingState
-{
-	struct FSample
-	{
-		explicit FSample(FRHIRenderQueryPool* Pool, const uint32 InAgentCount)
-			: TotalBegin(Pool->AllocateQuery())
-			, TotalEnd(Pool->AllocateQuery())
-			, UnitsBegin(Pool->AllocateQuery())
-			, UnitsEnd(Pool->AllocateQuery())
-			, VisionBegin(Pool->AllocateQuery())
-			, VisionEnd(Pool->AllocateQuery())
-			, FogBegin(Pool->AllocateQuery())
-			, FogEnd(Pool->AllocateQuery())
-			, AgentCount(InAgentCount)
-		{
-		}
-
-		FRHIPooledRenderQuery TotalBegin;
-		FRHIPooledRenderQuery TotalEnd;
-		FRHIPooledRenderQuery UnitsBegin;
-		FRHIPooledRenderQuery UnitsEnd;
-		FRHIPooledRenderQuery VisionBegin;
-		FRHIPooledRenderQuery VisionEnd;
-		FRHIPooledRenderQuery FogBegin;
-		FRHIPooledRenderQuery FogEnd;
-		FGraphEventRef RHIEndFence;
-		uint32 AgentCount = 0;
-	};
-
-	static constexpr uint32 SampleEveryNDraws = 15;
-	static constexpr uint32 SamplesPerReport = 16;
-
-	bool ShouldCreateSample(const uint32 AgentCount)
-	{
-		GatherReadySamples(false);
-		++DrawCounter;
-		return AgentCount > 0
-			&& GSupportsTimestampRenderQueries
-			&& (DrawCounter % SampleEveryNDraws) == 1;
-	}
-
-	TSharedPtr<FSample, ESPMode::ThreadSafe> CreateSample(const uint32 AgentCount)
-	{
-		if (!QueryPool.IsValid())
-		{
-			QueryPool = RHICreateRenderQueryPool(RQT_AbsoluteTime, SamplesPerReport * 8);
-		}
-
-		TSharedPtr<FSample, ESPMode::ThreadSafe> Sample =
-			MakeShared<FSample, ESPMode::ThreadSafe>(QueryPool.GetReference(), AgentCount);
-		PendingSamples.Add(Sample);
-		return Sample;
-	}
-
-	void Release_RenderThread()
-	{
-		GatherReadySamples(true);
-		if (AccumulatedSamples > 0)
-		{
-			LogAndReset();
-		}
-		PendingSamples.Reset();
-		QueryPool.SafeRelease();
-	}
-
-private:
-	static bool ReadQuery(const FRHIPooledRenderQuery& Query, uint64& OutValue, const bool bWait)
-	{
-		return Query.IsValid() && RHIGetRenderQueryResult(Query.GetQuery(), OutValue, bWait);
-	}
-
-	void GatherReadySamples(const bool bWait)
-	{
-		check(IsInRenderingThread());
-		while (PendingSamples.Num() > 0)
-		{
-			const TSharedPtr<FSample, ESPMode::ThreadSafe>& Sample = PendingSamples[0];
-			if (!Sample->RHIEndFence)
-			{
-				return;
-			}
-			if (!Sample->RHIEndFence->IsComplete())
-			{
-				if (!bWait)
-				{
-					return;
-				}
-				FRHICommandListExecutor::WaitOnRHIThreadFence(Sample->RHIEndFence);
-			}
-
-			uint64 TotalBegin = 0;
-			uint64 TotalEnd = 0;
-			uint64 UnitsBegin = 0;
-			uint64 UnitsEnd = 0;
-			uint64 VisionBegin = 0;
-			uint64 VisionEnd = 0;
-			uint64 FogBegin = 0;
-			uint64 FogEnd = 0;
-			const bool bReady =
-				ReadQuery(Sample->TotalBegin, TotalBegin, bWait)
-				&& ReadQuery(Sample->TotalEnd, TotalEnd, bWait)
-				&& ReadQuery(Sample->UnitsBegin, UnitsBegin, bWait)
-				&& ReadQuery(Sample->UnitsEnd, UnitsEnd, bWait)
-				&& ReadQuery(Sample->VisionBegin, VisionBegin, bWait)
-				&& ReadQuery(Sample->VisionEnd, VisionEnd, bWait)
-				&& ReadQuery(Sample->FogBegin, FogBegin, bWait)
-				&& ReadQuery(Sample->FogEnd, FogEnd, bWait);
-
-			if (!bReady)
-			{
-				if (!bWait)
-				{
-					return;
-				}
-				PendingSamples.RemoveAt(0);
-				continue;
-			}
-
-			const double UnitsMs = static_cast<double>(UnitsEnd - UnitsBegin) / 1000.0;
-			const double VisionMs = static_cast<double>(VisionEnd - VisionBegin) / 1000.0;
-			const double FogMs = static_cast<double>(FogEnd - FogBegin) / 1000.0;
-			const double TotalMs = static_cast<double>(TotalEnd - TotalBegin) / 1000.0;
-			Accumulate(Sample->AgentCount, UnitsMs, VisionMs, FogMs, TotalMs);
-			PendingSamples.RemoveAt(0);
-		}
-	}
-
-	void Accumulate(
-		const uint32 AgentCount,
-		const double UnitsMs,
-		const double VisionMs,
-		const double FogMs,
-		const double TotalMs)
-	{
-		if (AccumulatedSamples > 0 && TimedAgentCount != AgentCount)
-		{
-			LogAndReset();
-		}
-
-		TimedAgentCount = AgentCount;
-		++AccumulatedSamples;
-		UnitsSumMs += UnitsMs;
-		VisionSumMs += VisionMs;
-		FogSumMs += FogMs;
-		TotalSumMs += TotalMs;
-		TotalMinMs = FMath::Min(TotalMinMs, TotalMs);
-		TotalMaxMs = FMath::Max(TotalMaxMs, TotalMs);
-
-		if (AccumulatedSamples >= SamplesPerReport)
-		{
-			LogAndReset();
-		}
-	}
-
-	void LogAndReset()
-	{
-		const double InvSamples = 1.0 / static_cast<double>(AccumulatedSamples);
-		UE_LOG(LogTemp, Display,
-			TEXT("MassBattleMinimapPerf GPU: Agents=%u Samples=%u UnitsAvg=%.3fms VisionAvg=%.3fms FogAvg=%.3fms TotalAvg=%.3fms TotalMin=%.3fms TotalMax=%.3fms"),
-			TimedAgentCount,
-			AccumulatedSamples,
-			UnitsSumMs * InvSamples,
-			VisionSumMs * InvSamples,
-			FogSumMs * InvSamples,
-			TotalSumMs * InvSamples,
-			TotalMinMs,
-			TotalMaxMs);
-
-		AccumulatedSamples = 0;
-		UnitsSumMs = 0.0;
-		VisionSumMs = 0.0;
-		FogSumMs = 0.0;
-		TotalSumMs = 0.0;
-		TotalMinMs = TNumericLimits<double>::Max();
-		TotalMaxMs = 0.0;
-	}
-
-	FRenderQueryPoolRHIRef QueryPool;
-	TArray<TSharedPtr<FSample, ESPMode::ThreadSafe>> PendingSamples;
-	uint64 DrawCounter = 0;
-	uint32 TimedAgentCount = 0;
-	uint32 AccumulatedSamples = 0;
-	double UnitsSumMs = 0.0;
-	double VisionSumMs = 0.0;
-	double FogSumMs = 0.0;
-	double TotalSumMs = 0.0;
-	double TotalMinMs = TNumericLimits<double>::Max();
-	double TotalMaxMs = 0.0;
-};
-
+FMassBattleMinimapRenderData::FMassBattleMinimapRenderData() = default;
 FMassBattleMinimapRenderData::~FMassBattleMinimapRenderData() = default;
 
 void FMassBattleMinimapRenderData::Upload_GameThread(FMassBattleMinimapUploadData&& UploadData)
@@ -479,44 +290,33 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	const FMassBattleMinimapUploadData& UploadData)
 {
 	check(IsInRenderingThread());
-	const double UploadStartSeconds = FPlatformTime::Seconds();
-	static_assert(sizeof(FVector) == sizeof(uint32) * 6, "The minimap shader expects UE5 double FVector storage.");
 	static_assert(sizeof(FVector4f) == sizeof(float) * 4, "Unexpected FVector4f storage.");
 	static_assert(sizeof(FLinearColor) == sizeof(float) * 4, "Unexpected FLinearColor storage.");
-	static_assert(sizeof(bool) == sizeof(uint8), "The minimap hidden buffer expects byte bool storage.");
 
-	AgentCount_RenderThread = static_cast<uint32>(FMath::Min(
-		UploadData.Locations.Num(),
-		FMath::Min(UploadData.DynamicParams0.Num(), UploadData.IsHidden.Num())));
+	const int32 AvailableSourceCount = UploadData.Units.Num();
+	AgentCount_RenderThread = static_cast<uint32>(FMath::Clamp(UploadData.UnitCount, 0, AvailableSourceCount));
+	VisionSourceCount_RenderThread = static_cast<uint32>(FMath::Clamp(UploadData.VisionSourceCount, 0, AvailableSourceCount));
+	FogVisibleCount_RenderThread = static_cast<uint32>(UploadData.FogVisibleMarkers.Num());
 	TeamColorCount_RenderThread = static_cast<uint32>(UploadData.TeamColors.Num());
 
 	InitializeReadBuffer(
 		RHICmdList,
-		LocationWordsBuffer,
-		TEXT("MassBattleMinimap.LocationWords"),
-		sizeof(uint32),
-		static_cast<uint32>(UploadData.Locations.Num() * 6),
-		PF_R32_UINT,
-		UploadData.Locations.GetData(),
-		static_cast<uint32>(UploadData.Locations.Num() * sizeof(FVector)));
-	InitializeReadBuffer(
-		RHICmdList,
-		DynamicParams0Buffer,
-		TEXT("MassBattleMinimap.DynamicParams0"),
+		UnitDataBuffer,
+		TEXT("MassBattleMinimap.UnitData"),
 		sizeof(FVector4f),
-		static_cast<uint32>(UploadData.DynamicParams0.Num()),
+		static_cast<uint32>(UploadData.Units.Num()),
 		PF_A32B32G32R32F,
-		UploadData.DynamicParams0.GetData(),
-		static_cast<uint32>(UploadData.DynamicParams0.Num() * sizeof(FVector4f)));
+		UploadData.Units.GetData(),
+		static_cast<uint32>(UploadData.Units.Num() * sizeof(FVector4f)));
 	InitializeReadBuffer(
 		RHICmdList,
-		IsHiddenBuffer,
-		TEXT("MassBattleMinimap.IsHidden"),
-		sizeof(uint8),
-		static_cast<uint32>(UploadData.IsHidden.Num()),
-		PF_R8_UINT,
-		UploadData.IsHidden.GetData(),
-		static_cast<uint32>(UploadData.IsHidden.Num() * sizeof(bool)));
+		FogVisibleBuffer,
+		TEXT("MassBattleMinimap.FogVisible"),
+		sizeof(FVector4f),
+		FogVisibleCount_RenderThread,
+		PF_A32B32G32R32F,
+		UploadData.FogVisibleMarkers.GetData(),
+		static_cast<uint32>(UploadData.FogVisibleMarkers.Num() * sizeof(FVector4f)));
 	InitializeReadBuffer(
 		RHICmdList,
 		TeamColorsBuffer,
@@ -533,28 +333,17 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	VisionRadiusUU_RenderThread = FMath::Max(UploadData.VisionRadiusUU, 0.0f);
 	UnitRadiusUU_RenderThread = FMath::Max(UploadData.UnitRadiusUU, 0.0f);
 	FogOpacity_RenderThread = FMath::Clamp(UploadData.FogOpacity, 0.0f, 1.0f);
-	ViewingTeamIndex_RenderThread = UploadData.ViewingTeamIndex;
-
-	const double UploadMs = (FPlatformTime::Seconds() - UploadStartSeconds) * 1000.0;
-	UE_LOG(LogTemp, Display,
-		TEXT("MassBattleMinimapPerf RT: Agents=%u BufferCreateAndUpload=%.3fms"),
-		AgentCount_RenderThread,
-		UploadMs);
 }
 
 void FMassBattleMinimapRenderData::Release_RenderThread()
 {
 	check(IsInRenderingThread());
-	if (GpuTimingState)
-	{
-		GpuTimingState->Release_RenderThread();
-		GpuTimingState.Reset();
-	}
 	AgentCount_RenderThread = 0;
+	VisionSourceCount_RenderThread = 0;
+	FogVisibleCount_RenderThread = 0;
 	TeamColorCount_RenderThread = 0;
-	LocationWordsBuffer.Release();
-	DynamicParams0Buffer.Release();
-	IsHiddenBuffer.Release();
+	UnitDataBuffer.Release();
+	FogVisibleBuffer.Release();
 	TeamColorsBuffer.Release();
 }
 
@@ -598,76 +387,8 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 	const FVector2f OutputExtentF(static_cast<float>(OutputExtent.X), static_cast<float>(OutputExtent.Y));
 	const bool bCanDrawUnits = AgentCount_RenderThread > 0
 		&& TeamColorCount_RenderThread > 0
-		&& LocationWordsBuffer.SRV.IsValid()
-		&& DynamicParams0Buffer.SRV.IsValid()
-		&& IsHiddenBuffer.SRV.IsValid()
+		&& UnitDataBuffer.SRV.IsValid()
 		&& TeamColorsBuffer.SRV.IsValid();
-	if (!GpuTimingState)
-	{
-		GpuTimingState = MakeUnique<FMassBattleMinimapGpuTimingState>();
-	}
-	TSharedPtr<FMassBattleMinimapGpuTimingState::FSample, ESPMode::ThreadSafe> GpuTimingSample;
-	if (GpuTimingState->ShouldCreateSample(bCanDrawUnits ? AgentCount_RenderThread : 0))
-	{
-		GpuTimingSample = GpuTimingState->CreateSample(AgentCount_RenderThread);
-	}
-
-	// First raster pass: units. One instanced GPU quad per raw Mass Battle Frame entry.
-	if (bCanDrawUnits)
-	{
-		FMassBattleMinimapPassParameters* PassParameters = GraphBuilder.AllocParameters<FMassBattleMinimapPassParameters>();
-		PassParameters->RenderTargets[0] = FRenderTargetBinding(Inputs.OutputTexture, ERenderTargetLoadAction::ELoad);
-
-		FMassBattleMinimapUnitVS::FParameters VSParameters;
-		VSParameters.RectMin = RectMin;
-		VSParameters.RectSize = RectSize;
-		VSParameters.OutputExtent = OutputExtentF;
-		VSParameters.MapMin = MapMin_RenderThread;
-		VSParameters.MapSize = MapSize_RenderThread;
-		VSParameters.LogicalResolution = LogicalResolution_RenderThread;
-		VSParameters.UnitRadiusUU = UnitRadiusUU_RenderThread;
-		VSParameters.TeamColorCount = TeamColorCount_RenderThread;
-		VSParameters.LocationWords = LocationWordsBuffer.SRV;
-		VSParameters.DynamicParams0 = DynamicParams0Buffer.SRV;
-		VSParameters.IsHidden = IsHiddenBuffer.SRV;
-		VSParameters.TeamColors = TeamColorsBuffer.SRV;
-
-		TShaderMapRef<FMassBattleMinimapUnitVS> VertexShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-		TShaderMapRef<FMassBattleMinimapUnitPS> PixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-		const uint32 AgentCount = AgentCount_RenderThread;
-
-		GraphBuilder.AddPass(
-			RDG_EVENT_NAME("MassBattleMinimap.Units(%u)", AgentCount),
-			PassParameters,
-			ERDGPassFlags::Raster,
-			[PassParameters, VSParameters, VertexShader, PixelShader, AgentCount, WidgetRect, OutputExtent, GpuTimingSample](FRDGAsyncTask, FRHICommandList& RHICmdList)
-			{
-				if (GpuTimingSample)
-				{
-					RHICmdList.EndRenderQuery(GpuTimingSample->TotalBegin.GetQuery());
-					RHICmdList.EndRenderQuery(GpuTimingSample->UnitsBegin.GetQuery());
-				}
-				RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, OutputExtent.X, OutputExtent.Y, 1.0f);
-				RHICmdList.SetScissorRect(true, WidgetRect.Min.X, WidgetRect.Min.Y, WidgetRect.Max.X, WidgetRect.Max.Y);
-
-				FGraphicsPipelineStateInitializer GraphicsPSOInit;
-				ConfigureCommonPipeline(RHICmdList, GraphicsPSOInit, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
-				GraphicsPSOInit.BlendState = TStaticBlendState<
-					CW_RGBA,
-					BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha,
-					BO_Add, BF_One, BF_InverseSourceAlpha>::GetRHI();
-				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
-				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
-				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
-				RHICmdList.SetStreamSource(0, nullptr, 0);
-				RHICmdList.DrawPrimitive(0, 2, AgentCount);
-				if (GpuTimingSample)
-				{
-					RHICmdList.EndRenderQuery(GpuTimingSample->UnitsEnd.GetQuery());
-				}
-				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
-			});
-	}
 
 	FRDGTextureDesc StencilDesc = FRDGTextureDesc::Create2D(
 		OutputExtent,
@@ -677,8 +398,8 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 	StencilDesc.NumSamples = Inputs.OutputTexture->Desc.NumSamples;
 	FRDGTextureRef VisibilityStencil = GraphBuilder.CreateTexture(StencilDesc, TEXT("MassBattleMinimap.VisibilityStencil"));
 
-	// Conservative visibility rule: only exact ViewingTeamIndex units reveal fog.
-	// No other Team ID is treated as allied until an explicit relationship input exists.
+	// First raster pass: friendly/allied sources are a compact prefix selected
+	// inside the existing MBF render traversal at the 3 Hz snapshot cadence.
 	{
 		FMassBattleMinimapPassParameters* PassParameters = GraphBuilder.AllocParameters<FMassBattleMinimapPassParameters>();
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(Inputs.OutputTexture, ERenderTargetLoadAction::ELoad);
@@ -696,32 +417,23 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 		VSParameters.MapSize = MapSize_RenderThread;
 		VSParameters.LogicalResolution = LogicalResolution_RenderThread;
 		VSParameters.VisionRadiusUU = VisionRadiusUU_RenderThread;
-		VSParameters.ViewingTeamIndex = ViewingTeamIndex_RenderThread;
-		VSParameters.LocationWords = LocationWordsBuffer.SRV;
-		VSParameters.DynamicParams0 = DynamicParams0Buffer.SRV;
-		VSParameters.IsHidden = IsHiddenBuffer.SRV;
+		VSParameters.VisionSources = UnitDataBuffer.SRV;
 
 		TShaderMapRef<FMassBattleMinimapVisionVS> VertexShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 		TShaderMapRef<FMassBattleMinimapVisionPS> PixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-		const uint32 AgentCount = AgentCount_RenderThread;
-		const bool bCanDrawVision = AgentCount > 0
-			&& LocationWordsBuffer.SRV.IsValid()
-			&& DynamicParams0Buffer.SRV.IsValid()
-			&& IsHiddenBuffer.SRV.IsValid();
+		const uint32 VisionSourceCount = VisionSourceCount_RenderThread;
+		const bool bCanDrawVision = VisionSourceCount > 0
+			&& UnitDataBuffer.SRV.IsValid();
 
 		GraphBuilder.AddPass(
-			RDG_EVENT_NAME("MassBattleMinimap.VisionStencil(%u)", bCanDrawVision ? AgentCount : 0),
+			RDG_EVENT_NAME("MassBattleMinimap.VisionStencil(%u)", bCanDrawVision ? VisionSourceCount : 0),
 			PassParameters,
 			ERDGPassFlags::Raster,
-			[PassParameters, VSParameters, VertexShader, PixelShader, AgentCount, bCanDrawVision, WidgetRect, OutputExtent, GpuTimingSample](FRDGAsyncTask, FRHICommandList& RHICmdList)
+			[PassParameters, VSParameters, VertexShader, PixelShader, VisionSourceCount, bCanDrawVision, WidgetRect, OutputExtent](FRDGAsyncTask, FRHICommandList& RHICmdList)
 			{
 				if (!bCanDrawVision)
 				{
 					return;
-				}
-				if (GpuTimingSample)
-				{
-					RHICmdList.EndRenderQuery(GpuTimingSample->VisionBegin.GetQuery());
 				}
 
 				RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, OutputExtent.X, OutputExtent.Y, 1.0f);
@@ -737,16 +449,13 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 1);
 				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
 				RHICmdList.SetStreamSource(0, nullptr, 0);
-				RHICmdList.DrawPrimitive(0, 2, AgentCount);
-				if (GpuTimingSample)
-				{
-					RHICmdList.EndRenderQuery(GpuTimingSample->VisionEnd.GetQuery());
-				}
+				RHICmdList.DrawPrimitive(0, 2, VisionSourceCount);
 				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
 			});
 	}
 
-	// Fog is drawn after units and skipped only inside the exact viewing team's vision.
+	// Next pass: darken only stencil 0. Units have not been drawn yet, so fog
+	// can never leak or merely dim an enemy marker.
 	{
 		FMassBattleMinimapPassParameters* PassParameters = GraphBuilder.AllocParameters<FMassBattleMinimapPassParameters>();
 		PassParameters->RenderTargets[0] = FRenderTargetBinding(Inputs.OutputTexture, ERenderTargetLoadAction::ELoad);
@@ -770,12 +479,8 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 			RDG_EVENT_NAME("MassBattleMinimap.Fog"),
 			PassParameters,
 			ERDGPassFlags::Raster,
-			[PassParameters, VSParameters, PSParameters, VertexShader, PixelShader, WidgetRect, OutputExtent, GpuTimingSample](FRDGAsyncTask, FRHICommandList& RHICmdList)
+			[PassParameters, VSParameters, PSParameters, VertexShader, PixelShader, WidgetRect, OutputExtent](FRDGAsyncTask, FRHICommandList& RHICmdList)
 			{
-				if (GpuTimingSample)
-				{
-					RHICmdList.EndRenderQuery(GpuTimingSample->FogBegin.GetQuery());
-				}
 				RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, OutputExtent.X, OutputExtent.Y, 1.0f);
 				RHICmdList.SetScissorRect(true, WidgetRect.Min.X, WidgetRect.Min.Y, WidgetRect.Max.X, WidgetRect.Max.Y);
 
@@ -794,12 +499,113 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 				SetShaderParameters(RHICmdList, PixelShader, PixelShader.GetPixelShader(), PSParameters);
 				RHICmdList.SetStreamSource(0, nullptr, 0);
 				RHICmdList.DrawPrimitive(0, 2, 1);
-				if (GpuTimingSample)
-				{
-					RHICmdList.EndRenderQuery(GpuTimingSample->FogEnd.GetQuery());
-					RHICmdList.EndRenderQuery(GpuTimingSample->TotalEnd.GetQuery());
-					GpuTimingSample->RHIEndFence = RHICmdList.RHIThreadFence();
-				}
+				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
+			});
+	}
+
+	// Fog-visible policies are unit-only markers. They are deliberately drawn
+	// after the fog pass without touching the visibility stencil, so attacks,
+	// permanent units, and remembered buildings never grant terrain vision. A
+	// true-vision normal marker below overwrites the dark marker at the same spot.
+	if (FogVisibleCount_RenderThread > 0
+		&& FogVisibleBuffer.SRV.IsValid()
+		&& TeamColorCount_RenderThread > 0
+		&& TeamColorsBuffer.SRV.IsValid())
+	{
+		FMassBattleMinimapPassParameters* PassParameters = GraphBuilder.AllocParameters<FMassBattleMinimapPassParameters>();
+		PassParameters->RenderTargets[0] = FRenderTargetBinding(Inputs.OutputTexture, ERenderTargetLoadAction::ELoad);
+
+		FMassBattleMinimapUnitVS::FParameters VSParameters;
+		VSParameters.RectMin = RectMin;
+		VSParameters.RectSize = RectSize;
+		VSParameters.OutputExtent = OutputExtentF;
+		VSParameters.MapMin = MapMin_RenderThread;
+		VSParameters.MapSize = MapSize_RenderThread;
+		VSParameters.LogicalResolution = LogicalResolution_RenderThread;
+		VSParameters.UnitRadiusUU = UnitRadiusUU_RenderThread;
+		VSParameters.UnitBrightness = FMath::Clamp(1.0f - FogOpacity_RenderThread, 0.15f, 1.0f);
+		VSParameters.TeamColorCount = TeamColorCount_RenderThread;
+		VSParameters.UnitData = FogVisibleBuffer.SRV;
+		VSParameters.TeamColors = TeamColorsBuffer.SRV;
+
+		TShaderMapRef<FMassBattleMinimapUnitVS> VertexShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+		TShaderMapRef<FMassBattleMinimapUnitPS> PixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+		const uint32 FogVisibleCount = FogVisibleCount_RenderThread;
+		GraphBuilder.AddPass(
+			RDG_EVENT_NAME("MassBattleMinimap.FogVisibleUnits(%u)", FogVisibleCount),
+			PassParameters,
+			ERDGPassFlags::Raster,
+			[PassParameters, VSParameters, VertexShader, PixelShader, FogVisibleCount, WidgetRect, OutputExtent](FRDGAsyncTask, FRHICommandList& RHICmdList)
+			{
+				RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, OutputExtent.X, OutputExtent.Y, 1.0f);
+				RHICmdList.SetScissorRect(true, WidgetRect.Min.X, WidgetRect.Min.Y, WidgetRect.Max.X, WidgetRect.Max.Y);
+
+				FGraphicsPipelineStateInitializer GraphicsPSOInit;
+				ConfigureCommonPipeline(RHICmdList, GraphicsPSOInit, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
+				GraphicsPSOInit.BlendState = TStaticBlendState<
+					CW_RGBA,
+					BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha,
+					BO_Add, BF_One, BF_InverseSourceAlpha>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<false, CF_Always>::GetRHI();
+				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 0);
+				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
+				RHICmdList.SetStreamSource(0, nullptr, 0);
+				RHICmdList.DrawPrimitive(0, 2, FogVisibleCount);
+				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
+			});
+	}
+
+	// Final pass: render only stencil 1. This all-world 3 Hz snapshot is independent
+	// of the camera-local Niagara submission set, so scene culling cannot erase map data.
+	if (bCanDrawUnits)
+	{
+		FMassBattleMinimapPassParameters* PassParameters = GraphBuilder.AllocParameters<FMassBattleMinimapPassParameters>();
+		PassParameters->RenderTargets[0] = FRenderTargetBinding(Inputs.OutputTexture, ERenderTargetLoadAction::ELoad);
+		PassParameters->RenderTargets.DepthStencil = FDepthStencilBinding(
+			VisibilityStencil,
+			ERenderTargetLoadAction::ENoAction,
+			ERenderTargetLoadAction::ELoad,
+			FExclusiveDepthStencil::DepthNop_StencilRead);
+
+		FMassBattleMinimapUnitVS::FParameters VSParameters;
+		VSParameters.RectMin = RectMin;
+		VSParameters.RectSize = RectSize;
+		VSParameters.OutputExtent = OutputExtentF;
+		VSParameters.MapMin = MapMin_RenderThread;
+		VSParameters.MapSize = MapSize_RenderThread;
+		VSParameters.LogicalResolution = LogicalResolution_RenderThread;
+		VSParameters.UnitRadiusUU = UnitRadiusUU_RenderThread;
+		VSParameters.UnitBrightness = 1.0f;
+		VSParameters.TeamColorCount = TeamColorCount_RenderThread;
+		VSParameters.UnitData = UnitDataBuffer.SRV;
+		VSParameters.TeamColors = TeamColorsBuffer.SRV;
+
+		TShaderMapRef<FMassBattleMinimapUnitVS> VertexShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+		TShaderMapRef<FMassBattleMinimapUnitPS> PixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
+		const uint32 AgentCount = AgentCount_RenderThread;
+		GraphBuilder.AddPass(
+			RDG_EVENT_NAME("MassBattleMinimap.VisibleUnits(%u)", AgentCount),
+			PassParameters,
+			ERDGPassFlags::Raster,
+			[PassParameters, VSParameters, VertexShader, PixelShader, AgentCount, WidgetRect, OutputExtent](FRDGAsyncTask, FRHICommandList& RHICmdList)
+			{
+				RHICmdList.SetViewport(0.0f, 0.0f, 0.0f, OutputExtent.X, OutputExtent.Y, 1.0f);
+				RHICmdList.SetScissorRect(true, WidgetRect.Min.X, WidgetRect.Min.Y, WidgetRect.Max.X, WidgetRect.Max.Y);
+
+				FGraphicsPipelineStateInitializer GraphicsPSOInit;
+				ConfigureCommonPipeline(RHICmdList, GraphicsPSOInit, VertexShader.GetVertexShader(), PixelShader.GetPixelShader());
+				GraphicsPSOInit.BlendState = TStaticBlendState<
+					CW_RGBA,
+					BO_Add, BF_SourceAlpha, BF_InverseSourceAlpha,
+					BO_Add, BF_One, BF_InverseSourceAlpha>::GetRHI();
+				GraphicsPSOInit.DepthStencilState = TStaticDepthStencilState<
+					false, CF_Always,
+					true, CF_Equal, SO_Keep, SO_Keep, SO_Keep,
+					true, CF_Equal, SO_Keep, SO_Keep, SO_Keep>::GetRHI();
+				SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, 1);
+				SetShaderParameters(RHICmdList, VertexShader, VertexShader.GetVertexShader(), VSParameters);
+				RHICmdList.SetStreamSource(0, nullptr, 0);
+				RHICmdList.DrawPrimitive(0, 2, AgentCount);
 				RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
 			});
 	}

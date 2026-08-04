@@ -14,7 +14,7 @@ struct FOGOFWAR_API FMassBattleFrameMinimapPerfStats
 {
 	GENERATED_BODY()
 
-	/** CPU time spent bulk-concatenating batches and scheduling one GPU upload. No agent traversal. */
+	/** CPU time spent copying the requested compact snapshot and scheduling its GPU upload. */
 	UPROPERTY(BlueprintReadOnly, Category = "FogOfWar|MassBattleFrame Minimap")
 	float ParameterPushMs = 0.0f;
 
@@ -84,6 +84,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "FogOfWar|MassBattleFrame Minimap")
 	int32 GetViewingTeamIndex() const { return ViewingTeamIndex; }
 
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame Minimap")
+	void SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices);
+
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
@@ -105,13 +108,20 @@ protected:
 	float UnitRadiusUU = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Fog", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0", DisplayName = "Fog Opacity"))
-	float FogDarkenOpacity = 0.5f;
+	float FogDarkenOpacity = 0.3f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MassBattleFrame Minimap|Performance", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "Hz", DisplayName = "Update Rate"))
-	float UpdateRateHz = 1.0f / 3.0f;
+	float UpdateRateHz = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team", meta = (ClampMin = "0", ClampMax = "1023", UIMin = "0", UIMax = "1023", DisplayName = "Viewing Team"))
-	int32 ViewingTeamIndex = 0;
+	int32 ViewingTeamIndex = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
+	bool bSyncViewingTeamFromRTSInput = true;
+
+	/** Manual additions merged with allies resolved from URTSDiplomacySubsystem. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
+	TArray<int32> AlliedTeamIndices;
 
 	/** Team id is used directly as this array's GPU lookup index. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
@@ -126,6 +136,7 @@ protected:
 
 private:
 	bool ResolveMapRegion();
+	void ApplyBaseMapTextureFromConfig();
 	void LoadTeamColorsFromConfig();
 	void HandleUpdateTimer();
 	void RestartUpdateTimer();
