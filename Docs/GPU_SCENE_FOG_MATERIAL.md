@@ -6,11 +6,9 @@
 FogOfWar 只替代 MassBattleFrame Agent Render Processor
   -> 低频 HashGrid occupied-cell gather 维护 ActiveProxyIds
   -> 普通渲染帧仅执行 Active Mass collection
-  -> Fog Agent Render Query 在 Archetype 层排除 ISKM，只处理最终可见 VAT / Actor
+  -> Fog Agent Render Query 只处理最终可见 VAT / Actor
        -> VAT：直接写最终稠密 Niagara 帧数组
        -> Actor：只生成必要的 Spawn / Recycle 增量命令
-  -> 独立 MassBattleISKM 最小语义状态 Query（仅逻辑 tick、只含最终可见 ISKM）
-       -> 独立 ISKM 后端提交 Transform / CustomData / Provider
   -> 24 Hz 请求时从同一次局部 HashGrid gather 收集友军/盟军 XY + XY 速度
   -> 一次紧凑 float4 GPU Buffer 上传
   -> A. 24 Hz：一个真实半径实例化圆 Draw 写高分辨率 PF_G8 Visual Mask
@@ -21,8 +19,6 @@ FogOfWar 只替代 MassBattleFrame Agent Render Processor
 ```
 
 A 与 C 共用同一次 `24 Hz` 源 Buffer 上传；C 只在 `3 Hz` 到期时额外提交低分辨率 GPU Draw，不重新遍历 CPU 单位或重新上传源。B 只消费 A 已生成的缓存 Visual Mask。每个源收集请求都以一遍镜头窗口与视野窗口的并集 HashGrid 扫描同时更新 Active 工作集，不存在第二条 source-only 路径。重表现 Query 在普通渲染帧和模拟子帧都只执行 Active collection。Active collection 由 `UE::Mass::FEntityCollection` 缓存并检查 Archetype entity-order version；成员稳定时不重写 handles。
-
-ISKM 不属于 MassBattleFrame 原版，也不嵌入 Fog Processor。独立 `MassBattleISKM` 的状态阶段和后端在 Fog 开启时复用同一份最终可见 `FEntityCollection`，Fog 的 VAT Query 则直接排除 ISKM Archetype；Fog 关闭时 ISKM 走自身未过滤管线。不存在旧后端、兼容层或双写路径。
 
 ## 场景显示
 
@@ -47,7 +43,7 @@ Final = lerp(Fogged, SceneColor, VisibilityMask)
 
 高分辨率 PF_G8 Visual Mask 只保存 `0/1`，按真实源位置和真实半径绘制，供场景后处理直接投影。HashGrid 对齐 PF_G8 逻辑图只保存 `0/3`，按 `3 Hz` 异步回读供表现过滤使用：
 
-- `0`：深雾，单位不产生有效 VAT/Actor/ISKM 提交；
+- `0`：深雾，单位不产生有效 VAT/Actor 提交；
 - `1`：仅表示异步布局交接时的未知格，与 `0` 一样不进入 Active 或任何表现后端；
 - `2`：仅用于攻击暴露、永久可见或 VAT 建筑最后快照等最终单单位例外，不写入世界图；
 - `3`：真视野，提交最终选定的表现后端。
@@ -61,9 +57,9 @@ Final = lerp(Fogged, SceneColor, VisibilityMask)
 替代 MBF Processor 在 Active collection 中消费上一代格状态，并在逻辑/状态计算完成后才调用表现后端：
 
 - `0/1` 都不激活代理，也不建立隐藏 VAT 项或其他后端实例；
-- 只有最终状态为 `2/3` 才把单位交给 VAT、Actor 或独立 ISKM 后端；
+- 只有最终状态为 `2/3` 才把单位交给 VAT 或 Actor 后端；
 - 重新显示时从当前权威位置开始，不从隐藏前旧位置补插值路径；
-- `RememberLastSeen` 的冻结建筑 payload 当前只由 VAT 后端重放；Actor/ISKM 类型隐藏，避免读取不可见实体的实时状态。
+- `RememberLastSeen` 的冻结建筑 payload 当前只由 VAT 后端重放；Actor 类型隐藏，避免读取不可见实体的实时状态。
 
 ## 小地图
 
@@ -74,7 +70,7 @@ Final = lerp(Fogged, SceneColor, VisibilityMask)
 ## 明确禁止
 
 - 普通渲染帧的全单位 Mass/HashGrid/历史槽位遍历；
-- 让 VAT、Actor 或 ISKM 后端重新决定 Fog；
+- 让 VAT 或 Actor 后端重新决定 Fog；
 - 每像素循环全部视野源；
 - `VisionMapGrid` / `PreviousVision`；
 - `FMassVisibilityFragment`；

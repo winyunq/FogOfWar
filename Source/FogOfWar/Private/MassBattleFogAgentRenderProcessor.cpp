@@ -7,9 +7,7 @@
 #include "MassBattleFogAgentRenderProcessor.h"
 #include "FogOfWarModule.h"
 #include "MassBattleFogVisionSourceFragment.h"
-#include "Fragments/MassBattleISKMFragment.h"
 #include "ProfilingDebugging/CsvProfiler.h"
-#include "Subsystems/MassBattleISKMWorldSubsystem.h"
 #include "Subsystems/MassBattleFogRenderSubsystem.h"
 
 CSV_DEFINE_CATEGORY(FogMassBattleRender, true);
@@ -337,7 +335,6 @@ void UMassBattleFogAgentRenderProcessor::ConfigureQueries(const TSharedRef<FMass
 
 	FEntityQueryBuilder(EntityQuery)
 		.All<FAgentTag>()
-		.None<FMassBattleISKMAddonFragment>()
 		.Optional<FNotRenderingTag, FRenderingWithParticleTag, FRenderingWithActorTag, FRenderingTag, FAppearingTag, FDyingTag>()
 		.All<FSubType, FStyleType, FTeam, FLocating, FRotating, FCollider, FVisualize, FHealth, FHealthBar, FAppear, FAttack, FHit, FDeath, FMove, FDefence, FDebuffing>(MARO)
 		.All<FEntityFlagFragment, FDeterminism, FScaling, FVisualizing, FTextPop, FAttacking, FMoving>(MARW)
@@ -370,7 +367,7 @@ void UMassBattleFogAgentRenderProcessor::ConfigureQueries(const TSharedRef<FMass
 	FEntityQueryBuilder(VisibilityWorkSetQuery)
 		.All<FAgentTag>()
 		.All<FEntityFlagFragment, FTeam, FLocating, FMoving, FVisualize, FSubType, FAttacking>(MARO)
-		.Optional<FMassBattleFogLastSeenFragment, FMassBattleISKMAddonFragment>(MARO)
+		.Optional<FMassBattleFogLastSeenFragment>(MARO)
 		.Optional<FMassBattleFogVisionSourceFragment>(MARO)
 		.RegisterWithProcessor(*this);
 
@@ -614,10 +611,7 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 				const auto AttackingList = VisibilityContext.GetFragmentView<FAttacking>();
 				const auto LastSeenList =
 					VisibilityContext.GetFragmentView<FMassBattleFogLastSeenFragment>();
-				const auto AddonISKMList =
-					VisibilityContext.GetFragmentView<FMassBattleISKMAddonFragment>();
 				const bool bHasLastSeen = LastSeenList.Num() == NumEntities;
-				const bool bHasAddonISKM = AddonISKMList.Num() == NumEntities;
 				const FMassBattleFogVisionSourceFragment* FogPolicy =
 					VisibilityContext.GetConstSharedFragmentPtr<FMassBattleFogVisionSourceFragment>();
 				const bool bProvidesVision = !FogPolicy || FogPolicy->bProvidesVision;
@@ -718,15 +712,11 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 						continue;
 					}
 
-					const bool bUsesAddonISKM = bHasAddonISKM && AddonISKMList[Index].bEnable;
-					if (!RenderList[Index].bEnable && !bUsesAddonISKM)
+					if (!RenderList[Index].bEnable)
 					{
 						continue;
 					}
-					if (!bUsesAddonISKM)
-					{
-						QueueRendererClassLoad(RenderList[Index].RendererClass);
-					}
+					QueueRendererClassLoad(RenderList[Index].RendererClass);
 
 					const int32 ProxyId = FindOrCreateProxy(
 						MassAPI,
@@ -740,7 +730,6 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 					FMassBattleFogRenderProxy& Proxy = ProxyPool[ProxyId];
 					Proxy.FogVisibilityState = VisibilityState;
 					Proxy.bFriendlyTeam = bFriendly;
-					Proxy.bUsesAddonISKM = bUsesAddonISKM;
 					Proxy.PendingRemovalStartWorldTime = -1.0;
 					Proxy.LastVisitedEpoch = VisibilityEpoch;
 					Proxy.LastVisibleEpoch = VisibilityEpoch;
@@ -893,18 +882,12 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 				{
 					continue;
 				}
-				const FMassBattleISKMAddonFragment* AddonISKM =
-					MassAPI.GetFragmentPtr<FMassBattleISKMAddonFragment>(Entity);
-				const bool bUsesAddonISKM = AddonISKM && AddonISKM->bEnable;
 				const FVisualize* Render = MassAPI.GetFragmentPtr<FVisualize>(Entity);
-				if ((!Render || !Render->bEnable) && !bUsesAddonISKM)
+				if (!Render || !Render->bEnable)
 				{
 					continue;
 				}
-				if (!bUsesAddonISKM && Render)
-				{
-					QueueRendererClassLoad(Render->RendererClass);
-				}
+				QueueRendererClassLoad(Render->RendererClass);
 				const FSubType* SubType = MassAPI.GetFragmentPtr<FSubType>(Entity);
 				if (!SubType)
 				{
@@ -920,7 +903,6 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 				FMassBattleFogRenderProxy& Proxy = ProxyPool[ProxyId];
 				Proxy.FogVisibilityState = VisibilityState;
 				Proxy.bFriendlyTeam = bFriendly;
-				Proxy.bUsesAddonISKM = bUsesAddonISKM;
 				Proxy.PendingRemovalStartWorldTime = -1.0;
 				if (Proxy.LastVisitedEpoch == VisibilityEpoch)
 				{
@@ -1110,7 +1092,7 @@ void UMassBattleFogAgentRenderProcessor::PrepareDenseRenderFrame(
 				{
 					OutActiveRenderEntities->Add(Proxy.Entity);
 				}
-				if (!bHasRenderer || Proxy.bUsesAddonISKM)
+				if (!bHasRenderer)
 				{
 					continue;
 				}
@@ -1343,13 +1325,6 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 	{
 		*ActiveRenderEntityCollection = UE::Mass::FEntityCollection(ActiveRenderEntitiesScratch);
 		CachedActiveCollectionMembershipVersion = ActiveWorkSetMembershipVersion;
-		if (UMassBattleISKMWorldSubsystem* ISKM =
-			World->GetSubsystem<UMassBattleISKMWorldSubsystem>())
-		{
-			ISKM->PublishExternalVisibleEntities(
-				ActiveRenderEntityCollection.ToSharedRef(),
-				ActiveWorkSetMembershipVersion);
-		}
 	}
 
 	// Combat simulation remains owned by MassBattle's logical processors. This
@@ -2769,6 +2744,10 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				if (!IsValid(RendererActor)) continue;
 				RendererActor->SubType.Index = SubType.Index;
 				MB.AgentRenderers.Add(SubType.Index, RendererActor);
+				UE_LOG(LogFogOfWar, Display,
+					TEXT("Mass presentation renderer created: subtype=%d class=%s"),
+					SubType.Index,
+					*RendererClass->GetPathName());
 			}
 
 			int32 RenderBatchId = -1;

@@ -52,7 +52,6 @@ public class FogOfWar : ModuleRules
 				"SlateCore",
 				"RTSInputSystem",
 				"MassBattleRTSDiplomacy",
-				"MassBattleISKM",
 				"MassCommon",
 				"UMG", // Needed for UUserWidget
 				"Niagara",

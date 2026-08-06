@@ -5,7 +5,6 @@
 
 #include "FogOfWarModule.h"
 #include "RTSDiplomacyTypes.h"
-#include "Subsystems/MassBattleISKMWorldSubsystem.h"
 #include "Subsystems/RTSDiplomacySubsystem.h"
 
 namespace
@@ -92,14 +91,6 @@ void UMassBattleFogRenderSubsystem::Configure(
 	const float OldVisionRadiusUU = VisionRadiusUU;
 	bActive = bInSceneActive;
 	bDebugRevealAll = bInDebugRevealAll;
-	if (UMassBattleISKMWorldSubsystem* ISKM = GetWorld()
-		? GetWorld()->GetSubsystem<UMassBattleISKMWorldSubsystem>()
-		: nullptr)
-	{
-		// ISKM is a separate presentation backend. Fog supplies only the final
-		// visible camera-local work set while the scene controller is active.
-		ISKM->SetExternalVisibilityFilterEnabled(bActive);
-	}
 	VisionRadiusUU = FMath::Max(0.0f, InVisionRadiusUU);
 	FogOpacity = FMath::Clamp(InFogOpacity, 0.0f, 1.0f);
 	AttackRevealDuration = FMath::Max(0.0f, InAttackRevealDuration);

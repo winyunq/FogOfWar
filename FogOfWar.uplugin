@@ -41,10 +41,6 @@
 		{
 			"Name": "MassBattleRTSDiplomacy",
 			"Enabled": true
-		},
-		{
-			"Name": "MassBattleISKM",
-			"Enabled": true
 		}
 	]
 }

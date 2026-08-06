@@ -8,8 +8,8 @@ Current invariants:
 0. FogOfWar injects processor ownership before CDO construction and audits the
    frozen Mass phase list. A failed audit is fatal; there is no runtime
    ownership switch or dual-writer mode.
-1. FogOfWar replaces only MBF's Agent Render processor without modifying MBF;
-   MBF has no ISKM processor to replace. Fresh final-mask revisions maintain
+1. FogOfWar replaces only MBF's Agent Render processor without modifying MBF.
+   Fresh final-mask revisions maintain
    stable proxies and ActiveProxyIds. Render and simulation sub-frames both
    execute the heavy presentation query only for an Active Mass entity
    collection. Combat and movement simulation remain owned by MBF's logical
@@ -31,12 +31,12 @@ Current invariants:
    copy may be in flight; no readback backlog is allowed.
 6. Deep-fog, state-1 and camera-external units are absent from all effective
    presentation submissions. They write no hidden VAT prewarm element and create
-   no Actor or ISKM instance. Only final state-2/3 units enter a backend.
+   no Actor instance. Only final state-2/3 units enter a backend.
 7. Attack exposure and AlwaysFogVisible upgrade one unit to state 2 only; they
    never mutate the terrain texture or reveal nearby units.
 8. RememberLastSeen stores a building payload only while it is in state 3.
-   Particle VAT can replay that frozen payload in state 2. Actor and ISKM
-   stay hidden because no frozen backend exists yet; they never read live hidden
+   Particle VAT can replay that frozen payload in state 2. Actor stays hidden
+   because no frozen backend exists yet; it never reads live hidden
    state.
 9. The 3 Hz all-world minimap snapshot uses a separate, low-frequency read-only
    query. It does not route N agents through LOD, VAT animation, interpolation
@@ -56,23 +56,13 @@ Current invariants:
     scene Fog actor it delegates directly to MassBattleFrame's real Execute;
     a placed actor always activates the new path. Missing prerequisites are
     fatal rather than falling back to a full population. Its VAT/Actor query
-    excludes ISKM archetypes and runs only for the final visible collection.
+    runs only for the final visible collection.
     VAT consumes dense arrays and Actor uses delta-sized spawn/recycle commands.
-12. ISKM is not an original MassBattleFrame processor and is not embedded in
-    FogOfWar. The independent MassBattleISKM plugin owns a minimal semantic-state
-    processor and a submission backend. Both consume Fog's one shared final-visible
-    FEntityCollection when filtering is active and use their own unfiltered query
-    otherwise. Fog's VAT query excludes ISKM at archetype matching time. There is
-    no legacy processor, fallback, compatibility scan, or dual backend. Renderer
-    cleanup scans only the dense live-instance list, never historic slot capacity.
-13. CSV stats FogMassBattleRender/ActiveProxies, ActiveHandleListRebuilt,
+12. CSV stats FogMassBattleRender/ActiveProxies, ActiveHandleListRebuilt,
     WorkSetRefresh, FullWorkSetConvergence, SpatialCandidates,
     FogVisibilityTests, UploadedElements and MinimapSnapshotAgents make the VAT
-    complexity boundary observable.
-    MassBattleISKMAddon/StateEntityVisits, EntityVisits and
-    ExternalVisibilityWorkSet expose the independent ISKM boundary.
-    UploadedElements and ISKM EntityVisits must track visible work, not total N
-    or historic S; the separate MinimapSnapshotAgents count is allowed to track
+    complexity boundary observable. UploadedElements must track visible work,
+    not total N or historic S; the separate MinimapSnapshotAgents count is allowed to track
     total N only at its 3 Hz request rate.
 
 Required target-map capture:
@@ -84,8 +74,6 @@ Required target-map capture:
 - unit-local fog-visible exceptions and true-visible counts;
 - remembered/permanent/attack exception counts;
 - final Niagara elements and upload bytes per subtype;
-- ISKM candidates, state visits, active instances, transform/custom-data submissions
-  and skips;
 - Actor spawn/recycle commands;
 - UMassBattleFogAgentRenderProcessor CPU time;
 - 24 Hz source collection count and CPU time;
@@ -99,8 +87,7 @@ Required target-map capture:
 2026-07-21 validation (current zero-fallback revision):
 
 - UE 5.8 FogOfWar module compile: succeeded.
-- The standard WinyunqEditor FogOfWar, MassBattleISKM and MassBattleISKMEditor
-  modules compiled and linked successfully.
+- The standard WinyunqEditor FogOfWar module compiled and linked successfully.
 - A full-RHI cold startup completed engine initialization and reported
   "Mass render pipeline audit passed". The audit requires original Agent Render
   absent and Fog Agent Render present; failure is fatal.
@@ -114,8 +101,8 @@ Required target-map capture:
   on logical ticks; expiration pruning happens only when a work-set refresh will
   consume it.
 - Fog-hidden candidates stop before presentation fragments. Hidden units create
-  no VAT prewarm, Actor instance or ISKM instance; the VAT and both ISKM stages
-  consume the same final-visible collection.
+  no VAT prewarm or Actor instance; VAT and Actor consume the same final-visible
+  collection.
 - Landscape/decal/MPC receiver code and assets removed; the EastAsia material
   restored to its original three-expression graph and Custom->Emissive wiring.
 - GameMap_WarSimulator1 controlled 600-frame CSV captures validate the asymmetric

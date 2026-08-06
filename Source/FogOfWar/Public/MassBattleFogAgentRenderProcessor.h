@@ -58,8 +58,6 @@ struct FMassBattleFogRenderProxy
 	uint32 NiagaraAcquireTag = 0;
 	/** Final state produced by the camera + fog broad phase for this refresh. */
 	uint8 FogVisibilityState = 0;
-	/** True when the independent MassBattleISKM add-on owns presentation. */
-	bool bUsesAddonISKM = false;
 	bool bFriendlyTeam = false;
 	bool bSnapOnNextUpdate = true;
 	/** Set only by a 3 Hz convergence pass; removal happens on a later pass. */

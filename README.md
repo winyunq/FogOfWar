@@ -10,7 +10,7 @@
 
 商业扩展的具体授权边界见 [COMMERCIAL_FEATURE_LICENSE.md](COMMERCIAL_FEATURE_LICENSE.md)。未经 Winyunq 书面授权，不得复制、分发、再许可或公开其实现。
 
-本插件不修改 MassBattleFrame 源码。它在 `DefaultMass.ini` 中关闭 MBF 原 Agent Render，并注册同阶段、同优先级、同处理器名称的 FogOfWar 自有实现。替代 Processor 以 HashGrid 低频维护稳定代理池和轻量 `ActiveProxyIds`；VAT/Actor 只处理最终可见实体。ISKM 不是 MassBattleFrame 原版功能，它在独立 `MassBattleISKM` 插件中用自己的最小状态阶段和提交后端消费同一份最终可见集合，不进入 VAT 主 Query。
+本插件不修改 MassBattleFrame 源码。它在 `DefaultMass.ini` 中关闭 MBF 原 Agent Render，并注册同阶段、同优先级、同处理器名称的 FogOfWar 自有实现。替代 Processor 以 HashGrid 低频维护稳定代理池和轻量 `ActiveProxyIds`；VAT/Actor 只处理最终可见实体。
 
 目标只有性能和容量：让 MassBattleFrame 支持更多单位。镜头外和深雾中的单位不进入重表现路径；普通帧的 CPU 遍历、数组写入和后端提交随当前有效工作集增长，而不是随全体单位数或历史实例槽位高水位增长。这不是以画面效果为目标的改造。
 
@@ -24,11 +24,9 @@
 flowchart LR
     A["HashGrid 低频候选收集"] --> B["稳定 ProxyPool + ActiveProxyIds"]
     B --> C["仅 Active 的 Mass Entity Collection"]
-    C --> D["Fog Agent Render：只含非 ISKM 的最终可见实体"]
+    C --> D["Fog Agent Render：只含最终可见实体"]
     D --> E1["VAT：LOD/动画后直接写最终稠密数组 O(V_vat)"]
     D --> E2["Actor：生成 Spawn / Recycle 增量命令 O(Δ)"]
-    C --> E3["ISKM 最小语义状态：仅逻辑 tick，O(V_iskm)"]
-    E3 --> E4["ISKM 后端：Transform / CustomData / Provider Submit"]
     A --> E["24 Hz 收集镜头附近视野源 XY+速度"]
     E --> F1["24 Hz 高分辨率场景 Visual Mask"]
     E --> F2["3 Hz HashGrid 逻辑 Mask"]
@@ -48,7 +46,7 @@ flowchart LR
 
 PF_G8 纹理保存精确字节：
 
-- `0`：深雾。普通单位退出 Active 工作集，不拥有有效 VAT/Actor/ISKM 提交。
+- `0`：深雾。普通单位退出 Active 工作集，不拥有有效 VAT/Actor 提交。
 - `1`：异步世界图换区时的保守内部值。与 `0` 相同，不进入 Active 工作集，也不写任何表现后端。
 - `2`：仅用于攻击暴露、`AlwaysFogVisible` 与可安全重放的 `RememberLastSeen` 等单单位例外。提交选定表现后端，但不揭开地形。
 - `3`：真视野。提交选定表现后端，场景显示原始亮度。
@@ -66,22 +64,20 @@ PF_G8 纹理保存精确字节：
 - `AlwaysFogVisible`：镜头内始终至少为状态 `2`。它在迷雾中显示为暗色，但不揭开地形或周围单位。
 - `RememberLastSeen`：用于建筑。最后一次状态 `3` 时保存位置、朝向、缩放、动画/材质参数、血条、LOD 和样式；失去视野后不得读取建筑后台的实时变化。
 
-`RememberLastSeen` 类型还需把 `FMassBattleFogLastSeenFragment` 添加到 `ExtraData.Fragments`。快照读写发生在替代 Processor 的有效实体执行中，不存在逐帧全量缓存维护 Query。当前冻结快照只由 VAT 后端重放；Actor/ISKM 类型在失去真视野后隐藏，避免为了画面语义重新引入隐藏实体更新或泄露实时状态。重新获得真视野时直接校正到权威状态。
+`RememberLastSeen` 类型还需把 `FMassBattleFogLastSeenFragment` 添加到 `ExtraData.Fragments`。快照读写发生在替代 Processor 的有效实体执行中，不存在逐帧全量缓存维护 Query。当前冻结快照只由 VAT 后端重放；Actor 类型在失去真视野后隐藏，避免为了画面语义重新引入隐藏实体更新或泄露实时状态。重新获得真视野时直接校正到权威状态。
 
 永久可见、攻击暴露和建筑快照都只把单个单位提升到状态 `2`，不会改写世界状态纹理。小地图在同一个 3 Hz 快照中把这些单位加入“雾中暗标记”批次；真视野单位标记随后以全亮度覆盖同位置暗标记。
 
 ## 表现后端提交与稠密帧缓冲
 
 - 镜头候选窗口外：不提交，包括友军；视野源收集与表现提交相互独立，不会形成自锁。
-- 深雾状态 `0` 与内部状态 `1`：从 `ActiveProxyIds` 以 swap-remove 移除；VAT 不上传重数组，Actor 只产生必要的回收命令，独立 ISKM 后端不再收到该实体。
-- 状态 `2/3`：只提交最终选定的一个后端。VAT 工作量为最终粒子数，Actor 创建/回收按状态变化增量执行，ISKM 只消费发布后的最终可见实体集合。
+- 深雾状态 `0` 与内部状态 `1`：从 `ActiveProxyIds` 以 swap-remove 移除；VAT 不上传重数组，Actor 只产生必要的回收命令。
+- 状态 `2/3`：只提交最终选定的一个后端。VAT 工作量为最终粒子数，Actor 创建/回收按状态变化增量执行。
 - `AlwaysFogVisible` 是有意保留的单单位例外；`RememberLastSeen` 仅在 VAT 可安全重放冻结快照时保留。
 
 Fog 不通过增删 Mass Tag 表示可见性。`FRenderingTag`/`FNotRenderingTag` 仍只服从 MBF 原本的 `FVisualize::bEnable`，避免单位过雾边界时触发 Archetype 迁移。
 
 `FVisualizing` 中的 Target/Interp/动画状态保持稳定；`InstanceId` 只是本帧稠密数组位置，不再是永久 Niagara 槽。每帧从 `ActiveProxyIds` 直接写最终数组，`LocationArray.Num()` 跟随本帧有效数量，数组 Capacity 不因普通可见性波动收缩。不存在“先写全体稀疏数组，再压缩重数组”的 Pass。Active handles 使用 UE 5.8 的版本感知 `UE::Mass::FEntityCollection` 缓存：成员稳定时不重写 handle 列表，只有成员变化才替换 handles；Archetype entity-order version 变化时由 UE 自行重建 ranges。VAT 稠密准备每个 Active 代理只查一次 `FVisualizing`，并在本帧复用该指针，不再重复随机读取 Flags/Visualize/Visualizing。
-
-ISKM 不属于 MassBattleFrame 原版，也不嵌入 Fog 替换处理器。唯一实现位于独立 `MassBattleISKM` 插件：Fog 开启时，Fog 的 VAT 主 Query 通过 `None<FMassBattleISKMAddonFragment>` 在 Archetype 层直接排除 ISKM；ISKM 的最小语义状态阶段与提交后端只遍历 Fog 发布的最终可见 collection，并复用同一个 `FEntityCollection` 缓存。Fog 关闭时 ISKM 使用自身未过滤管线。清理只扫描 Renderer 当前存活实例，不扫描历史 slot 高水位。不存在旧后端、回退或双写路径。
 
 ## 场景迷雾
 
@@ -126,7 +122,7 @@ bAutoRegisterWithProcessingPhases=False
 bAutoRegisterWithProcessingPhases=True
 ```
 
-FogOfWar 在 `PostConfigInit` 把 Agent Render 所有权写入当前进程的 Mass 配置缓存，发生在 Processor CDO 和 Phase 列表冻结之前；不会修改 MassBattleFrame 文件。`PostEngineInit` 再审计实际 Phase 列表，并强制要求“原 Agent Render 不存在、Fog Agent Render 存在”；不满足时直接 Fatal，不存在运行时切换、双写或兼容分支。ISKM 始终是独立插件管线，MassBattleFrame 没有 ISKM Processor 可供接管。
+FogOfWar 在 `PostConfigInit` 把 Agent Render 所有权写入当前进程的 Mass 配置缓存，发生在 Processor CDO 和 Phase 列表冻结之前；不会修改 MassBattleFrame 文件。`PostEngineInit` 再审计实际 Phase 列表，并强制要求“原 Agent Render 不存在、Fog Agent Render 存在”；不满足时直接 Fatal，不存在运行时切换、双写或兼容分支。
 
 副本保持 MBF 原来的 `FrameEnd`、Priority `10`、依赖和处理器名称。文件头记录上游 SHA-256；升级 MassBattleFrame 时机械同步副本，再重新应用标记为 `FOG-OF-WAR INSERTION` 的改动。
 

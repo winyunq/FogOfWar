@@ -197,14 +197,12 @@ void FFogOfWarModule::AuditProcessorPipeline()
 	const bool bHasFogRender = UE::FogOfWar::Private::IsProcessorClassInPhaseList(
 		PhaseConfigs, UMassBattleFogAgentRenderProcessor::StaticClass());
 
-	// The replacement owns only MassBattleFrame's VAT/Actor state stage. The
-	// independent MassBattleISKM processor remains a downstream backend and
-	// consumes the same final visible work set through its own subsystem.
+	// The replacement exclusively owns MassBattleFrame's VAT/Actor state stage.
 	const bool bPipelineOwned = !bHasOriginalRender && bHasFogRender;
 
 	if (bPipelineOwned)
 	{
-		UE_LOG(LogFogOfWar, Log, TEXT("Mass render pipeline audit passed: FogOfWar exclusively owns the MBF render state stage; independent MassBattleISKM remains a downstream backend."));
+		UE_LOG(LogFogOfWar, Log, TEXT("Mass render pipeline audit passed: FogOfWar exclusively owns the MBF VAT/Actor render state stage."));
 	}
 	else
 	{
