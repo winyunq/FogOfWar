@@ -50,7 +50,6 @@ public class FogOfWar : ModuleRules
 				"Renderer",
 				"Slate",
 				"SlateCore",
-				"RTSInputSystem",
 				"MassBattleRTSDiplomacy",
 				"MassCommon",
 				"UMG", // Needed for UUserWidget

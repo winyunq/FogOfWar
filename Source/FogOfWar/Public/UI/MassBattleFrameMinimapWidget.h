@@ -116,9 +116,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team", meta = (ClampMin = "0", ClampMax = "1023", UIMin = "0", UIMax = "1023", DisplayName = "Viewing Team"))
 	int32 ViewingTeamIndex = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
-	bool bSyncViewingTeamFromRTSInput = true;
-
 	/** Manual additions merged with allies resolved from URTSDiplomacySubsystem. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
 	TArray<int32> AlliedTeamIndices;

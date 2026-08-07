@@ -5,7 +5,6 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/BoxComponent.h"
 #include "Components/Image.h"
-#include "Engine/LocalPlayer.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -14,7 +13,6 @@
 #include "Minimap/MapRegion.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
-#include "RTSSelectionSubsystem.h"
 #include "Subsystems/MassBattleFogRenderSubsystem.h"
 #include "TimerManager.h"
 #include "UI/MassBattleFrameMinimapSlate.h"
@@ -139,16 +137,6 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 
 	FMassBattleMinimapUploadData UploadData;
 
-	if (bSyncViewingTeamFromRTSInput)
-	{
-		if (ULocalPlayer* LocalPlayer = World ? World->GetFirstLocalPlayerFromController() : nullptr)
-		{
-			if (const URTSSelectionSubsystem* SelectionSubsystem = LocalPlayer->GetSubsystem<URTSSelectionSubsystem>())
-			{
-				ViewingTeamIndex = FMath::Clamp(SelectionSubsystem->GetPlayerTeamIndex(), 0, TeamIdLookupSize - 1);
-			}
-		}
-	}
 	RenderFilter->ConfigureStandaloneMinimapTeams(ViewingTeamIndex, AlliedTeamIndices);
 
 	int32 FriendlySourceCount = 0;

@@ -5,7 +5,6 @@
 #include "MassBattleFrameFogSceneViewExtension.h"
 
 #include "Components/SceneComponent.h"
-#include "Engine/LocalPlayer.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -15,7 +14,6 @@
 #include "Minimap/MapPackageProfilePaths.h"
 #include "Minimap/MapRegion.h"
 #include "Misc/ConfigCacheIni.h"
-#include "RTSSelectionSubsystem.h"
 #include "SceneViewExtension.h"
 #include "Subsystems/MassBattleFogRenderSubsystem.h"
 #include "Subsystems/MassBattleHashGridSubsystem.h"
@@ -82,7 +80,6 @@ void AMassBattleFrameFogOfWar::ActivateMassBattleFrameFog()
 		return;
 	}
 
-	RefreshViewingTeamFromRTSInput();
 	if (!EnsureWorldVisibilityMask())
 	{
 		UE_LOG(LogMassBattleFrameFog, Fatal,
@@ -128,9 +125,6 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 	}
 
 	const double StartSeconds = FPlatformTime::Seconds();
-	const int32 PreviousViewingTeamIndex = ViewingTeamIndex;
-	RefreshViewingTeamFromRTSInput();
-	bForceLogicMaskUpdate |= PreviousViewingTeamIndex != ViewingTeamIndex;
 	if (!EnsureWorldVisibilityMask())
 	{
 		UE_LOG(LogMassBattleFrameFog, Fatal,
@@ -265,7 +259,6 @@ void AMassBattleFrameFogOfWar::SetTemporaryVisionRadius(const float InRadius)
 
 void AMassBattleFrameFogOfWar::SetViewingTeamIndex(const int32 InTeamIndex)
 {
-	bSyncViewingTeamFromRTSInput = false;
 	ViewingTeamIndex = FMath::Clamp(InTeamIndex, 0, 1023);
 	bForceLogicMaskUpdate = true;
 	PushMassBattleFrameFogParameters();
@@ -299,24 +292,6 @@ void AMassBattleFrameFogOfWar::SetDebugRevealAll(const bool bInRevealAll)
 	bDebugRevealAll = bInRevealAll;
 	bForceLogicMaskUpdate = true;
 	PushMassBattleFrameFogParameters();
-}
-
-void AMassBattleFrameFogOfWar::RefreshViewingTeamFromRTSInput()
-{
-	if (!bSyncViewingTeamFromRTSInput)
-	{
-		return;
-	}
-
-	UWorld* World = GetWorld();
-	ULocalPlayer* LocalPlayer = World ? World->GetFirstLocalPlayerFromController() : nullptr;
-	if (LocalPlayer)
-	{
-		if (const URTSSelectionSubsystem* SelectionSubsystem = LocalPlayer->GetSubsystem<URTSSelectionSubsystem>())
-		{
-			ViewingTeamIndex = FMath::Clamp(SelectionSubsystem->GetPlayerTeamIndex(), 0, 1023);
-		}
-	}
 }
 
 void AMassBattleFrameFogOfWar::ConfigureRenderFilter()

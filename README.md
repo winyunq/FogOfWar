@@ -103,7 +103,7 @@ HashGrid 对齐 PF_G8 逻辑图默认 `3 Hz`，只服务表现后端的一次异
 
 ## 玩家与盟友
 
-- 本地玩家身份来自 `URTSSelectionSubsystem::GetPlayerTeamIndex()`。
+- FogOfWar 不依赖输入或相机插件；通过场景雾/小地图的 `ViewingTeamIndex` 属性，或运行时调用 `SetViewingTeamIndex()`，由游戏层注入当前观察阵营。
 - 盟友来自当前世界 `URTSDiplomacySubsystem::GetSnapshot()`；只合并关系为 `Allied` 的 Team，`Neutral` 不共享视野。
 - `AlliedTeamIndices` 保留为手工追加项，不会覆盖外交系统结果。
 - 场景与小地图共享同一份玩家/盟友位掩码、统一视野半径和单位类型策略。

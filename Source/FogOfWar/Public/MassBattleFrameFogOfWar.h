@@ -112,10 +112,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0", ClampMax = "1023", UIMin = "0", UIMax = "1023"))
 	int32 ViewingTeamIndex = 1;
 
-	/** Pull the local player's identity from URTSSelectionSubsystem before every cache/upload update. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Team")
-	bool bSyncViewingTeamFromRTSInput = true;
-
 	/** Manual additions merged with allies resolved from URTSDiplomacySubsystem. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Team")
 	TArray<int32> AlliedTeamIndices;
@@ -205,7 +201,6 @@ protected:
 private:
 	void ActivateMassBattleFrameFog();
 	void DeactivateMassBattleFrameFog();
-	void RefreshViewingTeamFromRTSInput();
 	void ConfigureRenderFilter();
 	bool ResolveWorldMaskLayout();
 	bool EnsureWorldVisibilityMask();
