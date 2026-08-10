@@ -1,5 +1,15 @@
 # FogOfWar 2.0 — MassBattleFrame 战争迷雾与 GPU 小地图
 
+## 本次公开发布范围
+
+本仓库的默认分支提供可独立安装的战争迷雾、GPU 小地图、插件 Content、Shader、配置与完整构建源码。用户安装后需要在 Content Browser 设置中启用 **Show Plugin Content**，资产会显示在 **Plugins > FogOfWar Content**。
+
+`FogOfWar` 不依赖 `RTSInputSystem` 或历史 `OpenRTSCamera` 插件。游戏层通过 `UMassBattleFogRenderSubsystem::SetViewingTeamIndex()` 注入观察阵营；相机、小地图点击和选择系统可由项目自行提供。
+
+本次推送不包含本地工作区正在开发的处理器深度优化改动。公开默认分支以已提交的战争迷雾与小地图基线为准，未提交的 Processor、Shader、Subsystem、Widget 和资产修改不会进入本次发布。
+
+开源基线负责直接可用的功能与扩展接口；面向超大规模项目的专用处理器优化、项目适配和深度定制属于独立的商业服务范围。
+
 ## 授权与商业扩展
 
 公开版提供战争迷雾与 GPU 小地图基础能力。利用战争迷雾状态过滤场景单位表现提交、降低大规模单位渲染开销的 **Scene Visibility Performance Extension** 属于商业扩展，不属于本仓库根目录 MIT 授权范围，也不随公开版提供。
