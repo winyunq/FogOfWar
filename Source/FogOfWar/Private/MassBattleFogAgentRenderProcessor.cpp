@@ -1209,11 +1209,11 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 	CSV_SCOPED_TIMING_STAT(FogMassBattleRender, Processor);
 	auto& MB = UMassBattleSubsystem::GetRef(this);
 
-	// Net builds can schedule PostCombat on a presentation-only frame. Only the
+	// Net builds can schedule Subtick3 on a presentation-only frame. Only the
 	// final simulation sub-frame may advance targets, registration, animation
 	// state, or the Niagara logic-tick timestamp.
 	const bool bIsSimTick =
-		MB.IsSubFrameScheduled(ESubFrame::PostCombat)
+		MB.IsSubFrameScheduled(ESubFrame::Subtick3)
 		&& MB.IsSimulationTick();
 	const float SimDeltaTime = MB.GetCalculatedStepTime();
 	const float RenderDeltaTime = World->GetDeltaSeconds();
@@ -1662,16 +1662,9 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				bool bForceReset = false;
 				const bool bIsFirstUpdate = (Animating.PreviousAnimState == EAnimState::Dirty);
 
-				if (bIsFirstUpdate)
-				{
-					int32 IdleIdx = AnimationHelpers::PickRandomIndex(Animation.AnimData.IdleAnimData, Determinism.RandomStream);
-					if (IdleIdx != -1) Animating.SelectedIdleAnimIndex = IdleIdx;
-
-					int32 MoveIdx = AnimationHelpers::PickRandomIndex(Animation.AnimData.MoveAnimData, Determinism.RandomStream);
-					if (MoveIdx != -1) Animating.SelectedMoveAnimIndex = MoveIdx;
-				}
-
-				else if (Flags.HasFlag(PauseAnimChangeFlag)) { NextAnimState = Animating.AnimState; Flags.ClearFlag(PauseAnimChangeFlag); bForceReset = true; }
+				// Spawn and logical behavior own the animation slots. Fog visibility must
+				// never consume the entity's simulation RNG to choose them again.
+				if (Flags.HasFlag(PauseAnimChangeFlag)) { NextAnimState = Animating.AnimState; Flags.ClearFlag(PauseAnimChangeFlag); bForceReset = true; }
 				else if (Animating.AnimState == EAnimState::Montage) { NextAnimState = EAnimState::Montage; }
 				else if (Flags.HasFlag(DeathAnimFlag)) NextAnimState = EAnimState::Dying;
 				else if (Flags.HasFlag(AppearAnimFlag)) NextAnimState = EAnimState::Appearing;
@@ -1686,68 +1679,8 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 				if (Animating.AnimState != NextAnimState || bForceReset || bIsFirstUpdate)
 				{
-					if (!bIsFirstUpdate)
-					{
-						switch (Animating.AnimState)
-						{
-							case EAnimState::Falling: Animating.SelectedFallAnimIndex = -1; break;
-							case EAnimState::Appearing: Animating.SelectedAppearAnimIndex = -1; break;
-							case EAnimState::Attacking: Animating.SelectedAttackAnimIndex = -1; break;
-							case EAnimState::BeingHit: Animating.SelectedHitAnimIndex = -1; break;
-							case EAnimState::Dying: Animating.SelectedDeathAnimIndex = -1; break;
-							case EAnimState::Montage: Animating.SelectedMontageAnimIndex = -1; break;
-							default: break;
-						}
-					}
-
-					int32 NewIndex = -1;
-
-					switch (NextAnimState)
-					{
-						case EAnimState::Falling:
-							if (Animating.SelectedFallAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
-							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.FallAnimData, Determinism.RandomStream);
-								if (NewIndex != -1) Animating.SelectedFallAnimIndex = NewIndex;
-							}
-							break;
-						case EAnimState::Appearing:
-							if (Animating.SelectedAppearAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
-							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.AppearAnimData, Determinism.RandomStream);
-								if (NewIndex != -1) Animating.SelectedAppearAnimIndex = NewIndex;
-							}
-							break;
-						case EAnimState::Attacking:
-							if (Animating.SelectedAttackAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
-							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.AttackAnimData, Determinism.RandomStream);
-								if (NewIndex != -1) Animating.SelectedAttackAnimIndex = NewIndex;
-							}
-							break;
-						case EAnimState::BeingHit:
-							if (Animating.SelectedHitAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
-							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.HitAnimData, Determinism.RandomStream);
-								if (NewIndex != -1) Animating.SelectedHitAnimIndex = NewIndex;
-							}
-							break;
-						case EAnimState::Dying:
-							if (Animating.SelectedDeathAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
-							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.DeathAnimData, Determinism.RandomStream);
-								if (NewIndex != -1) Animating.SelectedDeathAnimIndex = NewIndex;
-							}
-							break;
-						case EAnimState::Montage:
-							if (Animating.SelectedMontageAnimIndex == AnimationHelpers::INVALID_ANIM_INDEX)
-							{
-								NewIndex = AnimationHelpers::PickRandomIndex(Animation.AnimData.OtherAnimData, Determinism.RandomStream);
-								if (NewIndex != -1) Animating.SelectedMontageAnimIndex = NewIndex;
-							}
-							break;
-						default: break;
-					}
+					// Match the base renderer: retain sim-selected slots across render
+					// state changes; an invalid slot stays empty instead of being rerolled.
 
 					Animating.PreviousAnimState = Animating.AnimState;
 					Animating.AnimState = NextAnimState;
