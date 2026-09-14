@@ -21,12 +21,25 @@ namespace UE::FogOfWar::Private
 			|| State == EAttackState::PostCast;
 	}
 
-	FORCEINLINE float EncodeMinimapTeam(const int32 TeamIndex)
+	constexpr uint32 MinimapTeamMask = (1u << 10) - 1u;
+	constexpr uint32 MinimapAttackedBit = 1u << 10;
+	constexpr uint32 MinimapSelectedBit = 1u << 11;
+	constexpr uint32 MinimapFullBrightnessBit = 1u << 12;
+
+	FORCEINLINE float EncodeMinimapUnitState(
+		const int32 TeamIndex,
+		const bool bAttacked,
+		const bool bSelected,
+		const bool bFullBrightness)
 	{
-		const uint32 PackedTeam = static_cast<uint32>(FMath::Clamp(TeamIndex, 0, 1023));
-		float PackedTeamAsFloat = 0.0f;
-		FMemory::Memcpy(&PackedTeamAsFloat, &PackedTeam, sizeof(PackedTeamAsFloat));
-		return PackedTeamAsFloat;
+		const uint32 PackedState =
+			(static_cast<uint32>(FMath::Clamp(TeamIndex, 0, 1023)) & MinimapTeamMask)
+			| (bAttacked ? MinimapAttackedBit : 0u)
+			| (bSelected ? MinimapSelectedBit : 0u)
+			| (bFullBrightness ? MinimapFullBrightnessBit : 0u);
+		float PackedStateAsFloat = 0.0f;
+		FMemory::Memcpy(&PackedStateAsFloat, &PackedState, sizeof(PackedStateAsFloat));
+		return PackedStateAsFloat;
 	}
 }
 
@@ -92,6 +105,20 @@ namespace UE::FogOfWar::Private
 
 namespace UE::FogOfWar::Private
 {
+	FORCEINLINE FVector ResolveMeshPivotLocation(
+		const FVector& EntityLocation,
+		const FRotating& Rotating,
+		const FScaling& Scaling,
+		const FCollider& Collider)
+	{
+		const float Radius = Collider.Radius * Scaling.Scale;
+		const float ShaftHalfHeight = Collider.Height * Scaling.Scale * 0.5f;
+		const FQuat PhysicsRotation =
+			FQuat(Rotating.RotationQuat) * FQuat(Collider.RelativeRotation.Quaternion());
+		return EntityLocation - PhysicsRotation.RotateVector(
+			FVector(0.0, 0.0, ShaftHalfHeight + Radius));
+	}
+
 	FORCEINLINE FVector4f EncodeAnimTracksA(
 		const uint16 StartFrame0,
 		const uint16 EndFrame0,
@@ -577,13 +604,12 @@ void UMassBattleFogAgentRenderProcessor::RefreshActiveRenderWorkSet(
 		QueryMax.Y = FMath::Max(QueryMax.Y, VisionMax.Y);
 	}
 
-	const double QueryCenterZ = HashGrid.GridOrigin.Z;
-	const double QueryHalfHeight = FMath::Max<double>(HashGrid.AgentCellSize.Z, ActiveWorkSetHalfHeightUU);
-	FIntVector MinCoord = HashGrid.AgentLocationToCoord(FVector(QueryMin.X, QueryMin.Y, QueryCenterZ - QueryHalfHeight));
-	FIntVector MaxCoord = HashGrid.AgentLocationToCoord(FVector(QueryMax.X, QueryMax.Y, QueryCenterZ + QueryHalfHeight));
+	FIntVector MinCoord = HashGrid.AgentLocationToCoord(FVector(QueryMin.X, QueryMin.Y, 0.0));
+	FIntVector MaxCoord = HashGrid.AgentLocationToCoord(FVector(QueryMax.X, QueryMax.Y, 0.0));
+	MinCoord.Z = 0;
+	MaxCoord.Z = 0;
 	if (MinCoord.X > MaxCoord.X) Swap(MinCoord.X, MaxCoord.X);
 	if (MinCoord.Y > MaxCoord.Y) Swap(MinCoord.Y, MaxCoord.Y);
-	if (MinCoord.Z > MaxCoord.Z) Swap(MinCoord.Z, MaxCoord.Z);
 
 	int32 OccupiedCellVisits = 0;
 	int32 SpatialCandidateVisits = 0;
@@ -1973,9 +1999,8 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			FVector AgentRenderScale = FVector::OneVector;
 			FQuat AgentFacingRot = FQuat(Rotating.RotationQuat);
 
-			// FLocating is the authoritative root on the domain surface. Rendering
-			// contributes only the authored mesh-local transform; collider dimensions
-			// never participate in visual Z placement.
+			// FLocating stores the physics/capsule center. Presentation always converts
+			// that value to the authored mesh pivot, matching the standard renderer.
 			if (bIsSimTick || !bUseInterpolation)
 			{
 				const FVisualize& RenderFrag = RenderList[i];
@@ -2006,8 +2031,11 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				}
 
 				FVector MeshLocalLocation = CombinedTransform.GetLocation();
-				MeshLocalLocation.Z = 0.0;
-				AgentRenderLocation = Locating.Location;
+				AgentRenderLocation = UE::FogOfWar::Private::ResolveMeshPivotLocation(
+					Locating.Location,
+					Rotating,
+					Scaling,
+					Collider);
 				AgentRenderLocation += AgentFacingRot.RotateVector(MeshLocalLocation);
 				AgentRenderRotation = CombinedTransform.GetRotation().IsIdentity()
 					? AgentFacingRot
@@ -2398,10 +2426,11 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 	// scan narrow: three read-only fragments plus the optional fog policy/memory.
 	if (bCollectMinimapSnapshot)
 	{
+		const bool bThisSnapshotCombatWhite = bMinimapCombatFlashWhite;
 		MBForEachEntityChunk<MBParallelToggle::RenderProcessor>(
 			MinimapSnapshotQuery,
 			Context,
-			[&, this](FMassExecutionContext& MinimapContext)
+			[&, this, bThisSnapshotCombatWhite](FMassExecutionContext& MinimapContext)
 			{
 				const int32 NumEntities = MinimapContext.GetNumEntities();
 				const auto Flags = MinimapContext.GetFragmentView<FEntityFlagFragment>();
@@ -2433,11 +2462,24 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 
 					const int32 TeamIndex = Teams[Index].index;
 					const FVector& Location = Locations[Index].Location;
+					const bool bAttacked = bThisSnapshotCombatWhite
+						&& (Flags[Index].HasFlag(BeingHitFlag)
+							|| Flags[Index].HasFlag(HitAnimFlag));
+					// Reuse the authoritative selection state exactly as it already exists.
+					// The minimap adds only a presentation bit; it introduces no new sync data.
+					const bool bSelected = TeamIndex == FogRenderSubsystem->GetViewingTeamIndex()
+						&& Flags[Index].HasFlag(SelectedFlag);
+					const bool bAlwaysFogVisible =
+						VisibilityPolicy == EMassBattleFogVisibilityPolicy::AlwaysFogVisible;
 					const FVector4f MinimapUnit(
 						static_cast<float>(Location.X),
 						static_cast<float>(Location.Y),
 						static_cast<float>(Location.Z),
-						UE::FogOfWar::Private::EncodeMinimapTeam(TeamIndex));
+						UE::FogOfWar::Private::EncodeMinimapUnitState(
+							TeamIndex,
+							bAttacked,
+							bSelected,
+							bAlwaysFogVisible));
 					if (!FogRenderSubsystem->IsFriendlyTeam(TeamIndex))
 					{
 						LocalOther.Add(MinimapUnit);
@@ -2453,7 +2495,11 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 								static_cast<float>(Snapshot.X),
 								static_cast<float>(Snapshot.Y),
 								static_cast<float>(Snapshot.Z),
-								UE::FogOfWar::Private::EncodeMinimapTeam(TeamIndex)));
+								UE::FogOfWar::Private::EncodeMinimapUnitState(
+									TeamIndex,
+									false,
+									false,
+									false)));
 						}
 					}
 					else if (bProvidesVision)
@@ -2561,6 +2607,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 			MoveTemp(MinimapFriendlyNonVisionUnitQueue.Items),
 			MoveTemp(MinimapOtherUnitQueue.Items),
 			MoveTemp(MinimapFogVisibleUnitQueue.Items));
+		bMinimapCombatFlashWhite = !bMinimapCombatFlashWhite;
 	}
 	if (bIsSimTick && AttackRevealQueue.Items.Num() > 0)
 	{
@@ -2757,12 +2804,14 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 				AgentFacingRot = AgentFacingRot * (FQuat)Moving.CurrentTilt.Inverse();
 			}
 
-			// The entity root already lies on the Landscape/domain surface.
-			// Renderer offsets remain mesh-local (normally 0,0,0); no capsule
-			// center/pivot correction is allowed to change visual Z.
+			// Match the update path and the standard renderer: presentation uses the
+			// authored mesh pivot rather than the physics/capsule center.
 			FVector MeshLocalLocation = CombinedTransform.GetLocation();
-			MeshLocalLocation.Z = 0.0;
-			FVector AgentRenderLocation = Locating.Location;
+			FVector AgentRenderLocation = UE::FogOfWar::Private::ResolveMeshPivotLocation(
+				Locating.Location,
+				Rotating,
+				Scaling,
+				MA.GetFragmentRef<FCollider>(EntityToRegister));
 			AgentRenderLocation += AgentFacingRot.RotateVector(MeshLocalLocation);
 
 			FQuat AgentRenderRotation = CombinedTransform.GetRotation().IsIdentity() ? AgentFacingRot : (AgentFacingRot * CombinedTransform.GetRotation());

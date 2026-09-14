@@ -15,13 +15,10 @@ struct FMassBattleFogAttackRevealObservation
 	int32 TeamIndex = 0;
 };
 
-/**
- * CPU mirror of the coarse GPU fog mask used by the replacement MBF renderer.
- *
- * This is not a unit cache and never queries or walks Mass entities. The GPU
- * returns one byte per HashGrid-sized XY cell. The replacement render
- * processor performs one O(1) lookup while it is already visiting that unit.
- */
+// CPU mirror of the coarse GPU fog mask used by the replacement MBF renderer.
+// This is not a unit cache and never queries or walks Mass entities. The GPU
+// returns one byte per HashGrid-sized XY cell. The replacement render
+// processor performs one O(1) lookup while it is already visiting that unit.
 UCLASS()
 class FOGOFWAR_API UMassBattleFogRenderSubsystem final : public UWorldSubsystem
 {
@@ -31,10 +28,16 @@ public:
 	static constexpr int32 TeamCount = 1024;
 	static constexpr int32 TeamWordCount = TeamCount / 32;
 
+	/** World-authoritative local observer identity shared by scene fog and minimap. */
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar|Teams")
+	void SetViewingTeamIndex(int32 InTeamIndex);
+
+	UFUNCTION(BlueprintPure, Category = "FogOfWar|Teams")
+	int32 GetViewingTeamIndex() const { return ViewingTeamIndex; }
+
 	void Configure(
 		bool bInSceneActive,
 		bool bInDebugRevealAll,
-		int32 InViewingTeamIndex,
 		const TArray<int32>& InAlliedTeamIndices,
 		float InVisionRadiusUU,
 		float InFogOpacity,
@@ -54,10 +57,8 @@ public:
 		const FVector2D& InWorldMin,
 		const FVector2D& InCellSize);
 
-	/**
-	 * Single O(1) lookup used by the replacement renderer. Returns
-	 * 0=deep hidden, 1=retained only, 2=fog-visible, 3=true vision.
-	 */
+	// Single O(1) lookup used by the replacement renderer. Returns
+	// 0=deep hidden, 1=retained only, 2=fog-visible, 3=true vision.
 	uint8 GetUnitVisibilityState(
 		int32 TeamIndex,
 		const FVector& WorldLocation,
@@ -68,22 +69,18 @@ public:
 
 	bool IsFriendlyTeam(int32 TeamIndex) const;
 	/** Used only when no active scene-fog controller owns the relationship. */
-	void ConfigureStandaloneMinimapTeams(int32 InViewingTeamIndex, const TArray<int32>& InAlliedTeamIndices);
+	void ConfigureStandaloneMinimapTeams(const TArray<int32>& InAlliedTeamIndices);
 
-	/**
-	 * The scene controller requests a source snapshot at its own update rate.
-	 * Source membership is rebuilt with the low-frequency camera/logic filter;
-	 * its compact position/velocity set is sampled independently at scene rate.
-	 */
+	// The scene controller requests a source snapshot at its own update rate.
+	// Source membership is rebuilt with the low-frequency camera/logic filter;
+	// its compact position/velocity set is sampled independently at scene rate.
 	void RequestVisionSourceCollection();
 	/** Consumed at the scene cadence; does not consume the low-frequency membership refresh. */
 	bool ConsumeVisionSourceSampleRequest(uint32& OutCollectionRevision);
 	bool ConsumeVisionSourceCollectionRequest(uint32& OutCollectionRevision);
 	bool ShouldCollectVisionSource(const FVector& WorldLocation) const;
-	/**
-	 * Each packed source is XY position + XY velocity. The renderer extrapolates
-	 * this 24 Hz snapshot on the GPU, so the scene edge moves every render frame.
-	 */
+	// Each packed source is XY position + XY velocity. The renderer extrapolates
+	// this 24 Hz snapshot on the GPU, so the scene edge moves every render frame.
 	void PublishVisionSources(
 		TArray<FVector4f>&& InSources,
 		uint32 CollectionRevision,
@@ -94,11 +91,9 @@ public:
 		double& OutSourceWorldTimeSeconds) const;
 	uint32 GetVisionCollectionRevision() const { return VisionCollectionRevision; }
 
-	/**
-	 * The minimap requests one narrow all-world read-only snapshot at 3 Hz, with
-	 * actual friendly/allied vision providers stored as a prefix,
-	 * so the widget never reads scene-culled Niagara batches or queries Mass.
-	 */
+	// The minimap requests one narrow all-world read-only snapshot at 3 Hz, with
+	// actual non-hostile vision providers stored as a prefix, so the widget never
+	// reads scene-culled Niagara batches or queries Mass.
 	void RequestMinimapSnapshotCollection();
 	bool ConsumeMinimapSnapshotCollectionRequest();
 	void PublishMinimapSnapshot(
@@ -116,10 +111,8 @@ public:
 	void PruneExpiredAttackReveals(double WorldTimeSeconds);
 	bool IsAttackRevealActive(const FMassEntityHandle& Entity) const;
 
-	/**
-	 * Iterates active attack events, never the unit population. Returned samples
-	 * are XYZ plus bit-cast team id in W for one-unit minimap markers only.
-	 */
+	// Iterates active attack events, never the unit population. Returned samples
+	// are XYZ plus bit-cast team id in W for one-unit minimap markers only.
 	void CollectAttackRevealMarkers(double WorldTimeSeconds, TArray<FVector4f>& OutMarkers);
 
 	/** Latest replacement-renderer workload, published once per render frame. */
@@ -163,9 +156,11 @@ private:
 
 	int32 WorldToMaskIndex(const FVector& WorldLocation) const;
 	bool IsInsideRequestedCameraWindow(const FVector& WorldLocation) const;
+	bool RefreshFriendlyTeamMask();
 
 	TArray<uint8> VisibilityStateCells;
 	TArray<uint32> FriendlyTeamMaskWords;
+	TArray<int32> ExplicitAlliedTeamIndices;
 	TArray<FVector4f> LatestVisionSources;
 	TArray<FVector4f> LatestMinimapUnits;
 	TArray<FVector4f> LatestMinimapFogVisibleUnits;
@@ -185,6 +180,7 @@ private:
 	float UnitVisibilityRemovalDelay = 0.333333f;
 	uint32 DiplomacyRevision = 0;
 	int32 FriendlyTeamCount = 0;
+	int32 ViewingTeamIndex = 1;
 	uint32 MaskGeneration = 0;
 	uint32 RenderWorkSetRevision = 1;
 	uint32 VisionSourceGeneration = 0;

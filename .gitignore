@@ -1,2 +1,25 @@
-Binaries/
-Intermediate/
+# Only plugin descriptors, source, configuration and assets are versioned.
+/*
+!/.gitignore
+!/.gitattributes
+!/.gitmodules
+!/*.uplugin
+!/Source/
+!/Config/
+!/Content/
+!/Resources/
+!/Shaders/
+
+# Generated files and caches are never project inputs.
+**/Binaries/
+**/Intermediate/
+**/Saved/
+**/DerivedDataCache/
+**/__pycache__/
+**/.pytest_cache/
+**/.vs/
+*.pyc
+*.pyo
+*.log
+*.bak
+*.codex-bak-*

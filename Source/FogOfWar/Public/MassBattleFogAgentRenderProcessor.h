@@ -44,10 +44,8 @@ class UMassBattleAgentSubsystem;
 class UMassBattleSubsystem;
 class UMassBattleHashGridSubsystem;
 
-/**
- * Stable, lightweight identity owned by FogOfWar. Heavy interpolation state
- * remains in FVisualizing; membership changes move only ProxyId integers.
- */
+// Stable, lightweight identity owned by FogOfWar. Heavy interpolation state
+// remains in FVisualizing; membership changes move only ProxyId integers.
 struct FMassBattleFogRenderProxy
 {
 	FMassEntityHandle Entity;
@@ -80,13 +78,9 @@ struct FMassBattleFogSubTypeWorkSet
 	TWeakObjectPtr<AMassBattleAgentRenderer> DenseLayoutRenderer;
 };
 
-/**
- * A unified processor that handles LOD selection, Animation state updates, and Rendering data packing.
- * Merges functionality from:
- * - MassBattleAgentLODProcessor
- * - MassBattleAgentAnimationProcessor
- * - MassBattleAgentRenderProcessor
- */
+// A unified processor that handles LOD selection, Animation state updates, and Rendering data packing.
+// Merges functionality from MassBattleAgentLODProcessor,
+// MassBattleAgentAnimationProcessor, and MassBattleAgentRenderProcessor.
 UCLASS(Config = Mass)
 class FOGOFWAR_API UMassBattleFogAgentRenderProcessor : public UMassBattleAgentRenderProcessor
 {
@@ -114,12 +108,10 @@ private:
 	/** Low-frequency all-world minimap snapshot; never enters the heavy agent render path. */
 	FMassEntityQuery MinimapSnapshotQuery;
 
-	/**
-	 * Cache-coherent low-frequency visibility/source pass. When the fog mask needs
-	 * every friendly source, a HashGrid walk already covers the world; processing
-	 * the matching Mass chunks once is cheaper than random fragment access per
-	 * grid record.
-	 */
+	// Cache-coherent low-frequency visibility/source pass. When the fog mask needs
+	// every friendly source, a HashGrid walk already covers the world; processing
+	// the matching Mass chunks once is cheaper than random fragment access per
+	// grid record.
 	FMassEntityQuery VisibilityWorkSetQuery;
 
 	/** Position/velocity-only sampling over the already filtered source membership. */
@@ -133,6 +125,9 @@ private:
 	FSpinLockArray<FVector4f> MinimapOtherUnitQueue;
 	FSpinLockArray<FVector4f> MinimapFogVisibleUnitQueue;
 	FSpinLockArray<FMassBattleFogAttackRevealObservation> AttackRevealQueue;
+	// Presentation-only phase. It is sampled once before the parallel minimap scan
+	// and flipped only after a new snapshot has been published on the game thread.
+	bool bMinimapCombatFlashWhite = true;
 	// FOG-OF-WAR INSERTION: stable proxy pool + lightweight active lists.
 	TArray<FMassBattleFogRenderProxy> ProxyPool;
 	TArray<int32> FreeProxyIds;
@@ -141,17 +136,13 @@ private:
 	/** One handle per renderer class; prevents repeated requests and GT sync loads. */
 	TMap<FSoftObjectPath, TSharedPtr<FStreamableHandle>> RendererClassLoadHandles;
 	TArray<FMassEntityHandle> ActiveRenderEntitiesScratch;
-	/**
-	 * UE's version-aware collection cache. Handles are replaced only when the
-	 * Active membership changes; internal archetype ranges rebuild themselves
-	 * only when Mass reports an entity-order version change.
-	 */
+	// UE's version-aware collection cache. Handles are replaced only when the
+	// Active membership changes; internal archetype ranges rebuild themselves
+	// only when Mass reports an entity-order version change.
 	TSharedPtr<UE::Mass::FEntityCollection> ActiveRenderEntityCollection;
-	/**
-	 * Camera/radius-filtered vision-source membership is rebuilt with the
-	 * low-frequency filter. Its positions are sampled independently at the
-	 * scene cadence without walking the full population or HashGrid again.
-	 */
+	// Camera/radius-filtered vision-source membership is rebuilt with the
+	// low-frequency filter. Its positions are sampled independently at the
+	// scene cadence without walking the full population or HashGrid again.
 	TSharedPtr<UE::Mass::FEntityCollection> VisionSourceEntityCollection;
 	uint32 VisionSourceEntityCollectionRevision = 0;
 	uint64 ActiveWorkSetMembershipVersion = 1;
@@ -290,18 +281,18 @@ private:
 		return *reinterpret_cast<float*>(&packed);
 	}
 
-	// PackData: Team (10 bits), Dissolve (10 bits), LODIndex (9 bits), DrawLOD (1 bit), BeingSelect (1 bit), Selected (1 bit) = 32 bits total
-	// Layout: | Selected (1 bit, bit 31) | BeingSelect (1 bit, bit 30) | DrawLOD (1 bit, bit 29) | LODIndex (9 bits, bits 20-28) | Dissolve (10 bits, bits 10-19) | Team (10 bits, bits 0-9) |
-	FORCEINLINE static float EncodeDynamicParams0(uint8 Team, uint8 Dissolve, int32 LOD, bool bDrawLOD, bool bBeingSelect, bool bSelected)
+	// Keep the existing Fog renderer's DP0.w ABI aligned with MassBattle_UnpackDP0W.
+	// Team: 0-7, Dissolve: 8-15, LOD: 16-19, DrawLOD: 20, BeingSelect: 21, Selected: 22.
+	FORCEINLINE static float EncodeDynamicParams0(int32 Team, uint8 Dissolve, int32 LOD, bool bDrawLOD, bool bBeingSelect, bool bSelected)
 	{
-		// Team: 10 bits (0-1023), clamp from 0-255
-		uint32 iTeam = FMath::Clamp(static_cast<uint32>(Team), 0u, 1023u);
+		// Team: 8 bits (0-255)
+		uint32 iTeam = FMath::Clamp(static_cast<uint32>(Team), 0u, 255u);
 
-		// Dissolve: 10 bits (0-1023), map 0-255 → 0-1023 (255 * 4.01 ≈ 1023)
-		uint32 iDissolve = FMath::Clamp((static_cast<uint32>(Dissolve) * 1023u) / 255u, 0u, 1023u);
+		// Dissolve: 8 bits (0-255), stored directly
+		uint32 iDissolve = FMath::Clamp(static_cast<uint32>(Dissolve), 0u, 255u);
 
-		// LODIndex: 9 bits (0-511), clamp from input (typically 0-4)
-		uint32 iLOD = FMath::Clamp(static_cast<uint32>(FMath::Max(0, LOD)), 0u, 511u);
+		// LODIndex: 4 bits (0-15), clamp from input (typically 0-4)
+		uint32 iLOD = FMath::Clamp(static_cast<uint32>(FMath::Max(0, LOD)), 0u, 15u);
 
 		// DrawLOD: 1 bit
 		uint32 iDrawLOD = bDrawLOD ? 1u : 0u;
@@ -312,8 +303,7 @@ private:
 		// Selected: 1 bit
 		uint32 iSelected = bSelected ? 1u : 0u;
 
-		// | Selected (1 bit) | BeingSelect (1 bit) | DrawLOD (1 bit) | LODIndex (9 bits) | Dissolve (10 bits) | Team (10 bits) |
-		uint32 packed = (iSelected << 31) | (iBeingSelect << 30) | (iDrawLOD << 29) | (iLOD << 20) | (iDissolve << 10) | iTeam;
+		uint32 packed = (iSelected << 22) | (iBeingSelect << 21) | (iDrawLOD << 20) | (iLOD << 16) | (iDissolve << 8) | iTeam;
 
 		return *reinterpret_cast<float*>(&packed);
 	}

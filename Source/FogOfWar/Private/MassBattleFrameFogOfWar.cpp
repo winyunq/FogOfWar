@@ -80,18 +80,9 @@ void AMassBattleFrameFogOfWar::ActivateMassBattleFrameFog()
 		return;
 	}
 
-	if (!EnsureWorldVisibilityMask())
-	{
-		UE_LOG(LogMassBattleFrameFog, Fatal,
-			TEXT("A placed MassBattleFrameFogOfWar actor requires a valid HashGrid-aligned visibility-mask layout; active fog never falls back to MassBattleFrame's unfiltered renderer."));
-	}
+	EnsureWorldVisibilityMask();
 	MaskReadbackMailbox = MakeShared<FMassBattleFrameFogMaskReadbackMailbox, ESPMode::ThreadSafe>();
 	SceneViewExtension = FSceneViewExtensions::NewExtension<FMassBattleFrameFogSceneViewExtension>();
-	if (!SceneViewExtension.IsValid())
-	{
-		UE_LOG(LogMassBattleFrameFog, Fatal,
-			TEXT("A placed MassBattleFrameFogOfWar actor could not register its scene view extension; the active path has no compatibility renderer."));
-	}
 
 	bFogActive = true;
 	bForceLogicMaskUpdate = true;
@@ -125,11 +116,7 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 	}
 
 	const double StartSeconds = FPlatformTime::Seconds();
-	if (!EnsureWorldVisibilityMask())
-	{
-		UE_LOG(LogMassBattleFrameFog, Fatal,
-			TEXT("MassBattleFrameFogOfWar lost its required visibility-mask layout; active fog never falls back to an unfiltered full-population renderer."));
-	}
+	EnsureWorldVisibilityMask();
 	ConfigureRenderFilter();
 	SetMassBattleFrameFogArrays();
 	LastParameterPushTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -137,6 +124,7 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 	LastPerfStats.ParameterPushMs = static_cast<float>((FPlatformTime::Seconds() - StartSeconds) * 1000.0);
 	LastPerfStats.ParameterPushCount++;
 	LastPerfStats.bSceneGpuPathActive = SceneViewExtension.IsValid();
+	int32 PerfViewingTeamIndex = INDEX_NONE;
 	if (const UMassBattleFogRenderSubsystem* RenderFilter = GetWorld()
 		? GetWorld()->GetSubsystem<UMassBattleFogRenderSubsystem>()
 		: nullptr)
@@ -146,6 +134,7 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 		LastPerfStats.bUnitFilterActive = RenderFilter->IsFilteringActive();
 		LastPerfStats.ActiveProxyCount = RenderFilter->GetActiveProxyCount();
 		LastPerfStats.NiagaraUploadElementCount = RenderFilter->GetUploadedElementCount();
+		PerfViewingTeamIndex = RenderFilter->GetViewingTeamIndex();
 	}
 	else
 	{
@@ -175,7 +164,7 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 			WorldMaskDimensions.X,
 			WorldMaskDimensions.Y,
 			TemporaryVisionRadius,
-			ViewingTeamIndex);
+			PerfViewingTeamIndex);
 		LastPerformanceLogTime = GetWorld()->GetTimeSeconds();
 	}
 }
@@ -257,13 +246,6 @@ void AMassBattleFrameFogOfWar::SetTemporaryVisionRadius(const float InRadius)
 	PushMassBattleFrameFogParameters();
 }
 
-void AMassBattleFrameFogOfWar::SetViewingTeamIndex(const int32 InTeamIndex)
-{
-	ViewingTeamIndex = FMath::Clamp(InTeamIndex, 0, 1023);
-	bForceLogicMaskUpdate = true;
-	PushMassBattleFrameFogParameters();
-}
-
 void AMassBattleFrameFogOfWar::SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices)
 {
 	AlliedTeamIndices.Reset(InAlliedTeamIndices.Num());
@@ -300,23 +282,12 @@ void AMassBattleFrameFogOfWar::ConfigureRenderFilter()
 	UMassBattleFogRenderSubsystem* RenderFilter = World ? World->GetSubsystem<UMassBattleFogRenderSubsystem>() : nullptr;
 	if (!RenderFilter)
 	{
-		if (bFogActive)
-		{
-			UE_LOG(LogMassBattleFrameFog, Fatal,
-				TEXT("A placed MassBattleFrameFogOfWar actor requires UMassBattleFogRenderSubsystem."));
-		}
 		return;
 	}
 
-	if (bFogActive && !bWorldMaskLayoutValid)
-	{
-		UE_LOG(LogMassBattleFrameFog, Fatal,
-			TEXT("Active MassBattleFrameFogOfWar has no valid visibility-mask layout."));
-	}
 	RenderFilter->Configure(
 		bFogActive,
 		bDebugRevealAll,
-		ViewingTeamIndex,
 		AlliedTeamIndices,
 		TemporaryVisionRadius,
 		FogOpacity,
@@ -554,9 +525,6 @@ bool AMassBattleFrameFogOfWar::ResolveWorldMaskLayout()
 		|| Width > MaxWorldMaskDimension || Height > MaxWorldMaskDimension
 		|| CellCount <= 0 || CellCount > MaxWorldMaskCells)
 	{
-		UE_LOG(LogMassBattleFrameFog, Fatal,
-			TEXT("World visibility mask requires %lldx%lld HashGrid cells (%lld total); safety limits are %d per dimension and %d total. Active fog has no unfiltered fallback."),
-			Width, Height, CellCount, MaxWorldMaskDimension, MaxWorldMaskCells);
 		return false;
 	}
 
@@ -567,7 +535,7 @@ bool AMassBattleFrameFogOfWar::ResolveWorldMaskLayout()
 	return true;
 }
 
-bool AMassBattleFrameFogOfWar::EnsureWorldVisibilityMask()
+void AMassBattleFrameFogOfWar::EnsureWorldVisibilityMask()
 {
 	const FIntPoint PreviousDimensions = WorldMaskDimensions;
 	const FVector2D PreviousCellSize = WorldMaskCellSize;
@@ -576,17 +544,12 @@ bool AMassBattleFrameFogOfWar::EnsureWorldVisibilityMask()
 	bWorldMaskLayoutValid = ResolveWorldMaskLayout();
 	if (!bWorldMaskLayoutValid)
 	{
-		return false;
+		return;
 	}
 
 	if (!WorldVisibilityMask)
 	{
 		WorldVisibilityMask = NewObject<UTextureRenderTarget2D>(this, TEXT("MassBattleFogWorldVisibilityMask"), RF_Transient);
-	}
-	if (!WorldVisibilityMask)
-	{
-		bWorldMaskLayoutValid = false;
-		return false;
 	}
 
 	const bool bNeedsInitialization = WorldVisibilityMask->SizeX != WorldMaskDimensions.X
@@ -611,7 +574,6 @@ bool AMassBattleFrameFogOfWar::EnsureWorldVisibilityMask()
 		|| PreviousWorldMin != WorldMaskMin
 		|| PreviousWorldSize != WorldMaskSize;
 	bForceLogicMaskUpdate |= bNeedsInitialization || bWorldLayoutChanged;
-	return true;
 }
 
 void AMassBattleFrameFogOfWar::ConsumeGpuMaskReadback()

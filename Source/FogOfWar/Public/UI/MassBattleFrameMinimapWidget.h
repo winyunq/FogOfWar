@@ -79,13 +79,13 @@ public:
 	float GetUnitRadiusUU() const { return UnitRadiusUU; }
 
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame Minimap")
-	void SetViewingTeamIndex(int32 InTeamIndex);
-
-	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "FogOfWar|MassBattleFrame Minimap")
-	int32 GetViewingTeamIndex() const { return ViewingTeamIndex; }
+	void SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices);
 
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame Minimap")
-	void SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices);
+	void SetRelationColorsEnabled(bool bEnabled);
+
+	UFUNCTION(BlueprintPure, Category = "FogOfWar|MassBattleFrame Minimap")
+	bool GetRelationColorsEnabled() const { return bRelationColorsEnabled; }
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -113,10 +113,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MassBattleFrame Minimap|Performance", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "Hz", DisplayName = "Update Rate"))
 	float UpdateRateHz = 3.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team", meta = (ClampMin = "0", ClampMax = "1023", UIMin = "0", UIMax = "1023", DisplayName = "Viewing Team"))
-	int32 ViewingTeamIndex = 1;
-
-	/** Manual additions merged with allies resolved from URTSDiplomacySubsystem. */
+	/** Manual additions used when diplomacy has no hostile relation for that Team. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
 	TArray<int32> AlliedTeamIndices;
 
@@ -127,6 +124,20 @@ protected:
 	/** Used for every Team ID that has no explicit TeamColorN entry in MinimapColors.ini. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
 	FLinearColor DefaultTeamColor = FLinearColor(0.7f, 0.7f, 0.7f, 1.0f);
+
+	/** Stable color used while a unit is in MassBattle's sampled hit-reaction state. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Feedback")
+	FLinearColor CombatUnitColor = FLinearColor::White;
+
+	/** Legacy shader ABI values; normal markers are no longer normalized or darkened. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "MassBattleFrame Minimap|Feedback")
+	bool bNormalizeTeamColorDirection = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "MassBattleFrame Minimap|Feedback")
+	float NormalUnitColorLength = 0.58f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "MassBattleFrame Minimap|Feedback")
+	float SelectedUnitColorLength = 1.0f;
 
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "MassBattleFrame Minimap|Performance")
 	FMassBattleFrameMinimapPerfStats LastPerfStats;
@@ -146,4 +157,5 @@ private:
 	TSharedPtr<FMassBattleMinimapRenderData, ESPMode::ThreadSafe> RenderData;
 
 	bool bIsSuccessfullyInitialized = false;
+	bool bRelationColorsEnabled = false;
 };

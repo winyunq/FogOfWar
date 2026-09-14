@@ -32,6 +32,10 @@ namespace
 			SHADER_PARAMETER(uint32, LogicalResolution)
 			SHADER_PARAMETER(float, UnitRadiusUU)
 			SHADER_PARAMETER(float, UnitBrightness)
+			SHADER_PARAMETER(FVector4f, CombatUnitColor)
+			SHADER_PARAMETER(float, NormalUnitColorLength)
+			SHADER_PARAMETER(float, SelectedUnitColorLength)
+			SHADER_PARAMETER(uint32, bNormalizeTeamColorDirection)
 			SHADER_PARAMETER(uint32, TeamColorCount)
 			SHADER_PARAMETER_SRV(Buffer<float4>, UnitData)
 			SHADER_PARAMETER_SRV(Buffer<float4>, TeamColors)
@@ -234,7 +238,10 @@ namespace
 
 		void SetPaintGeometry_GameThread(const FPaintGeometry& InPaintGeometry)
 		{
-			check(IsInGameThread());
+			if (!IsInGameThread())
+			{
+				return;
+			}
 			TWeakPtr<FMassBattleMinimapSlateElement, ESPMode::ThreadSafe> WeakSelf = AsShared();
 			ENQUEUE_RENDER_COMMAND(FUpdateMassBattleMinimapPaintGeometry)(
 				[WeakSelf, InPaintGeometry](FRHICommandListImmediate& RHICmdList)
@@ -265,7 +272,10 @@ FMassBattleMinimapRenderData::~FMassBattleMinimapRenderData() = default;
 
 void FMassBattleMinimapRenderData::Upload_GameThread(FMassBattleMinimapUploadData&& UploadData)
 {
-	check(IsInGameThread());
+	if (!IsInGameThread())
+	{
+		return;
+	}
 	TSharedRef<FMassBattleMinimapRenderData, ESPMode::ThreadSafe> Self = AsShared();
 	ENQUEUE_RENDER_COMMAND(FUploadMassBattleMinimapData)(
 		[Self, Data = MoveTemp(UploadData)](FRHICommandListImmediate& RHICmdList) mutable
@@ -276,7 +286,10 @@ void FMassBattleMinimapRenderData::Upload_GameThread(FMassBattleMinimapUploadDat
 
 void FMassBattleMinimapRenderData::Release_GameThread()
 {
-	check(IsInGameThread());
+	if (!IsInGameThread())
+	{
+		return;
+	}
 	TSharedRef<FMassBattleMinimapRenderData, ESPMode::ThreadSafe> Self = AsShared();
 	ENQUEUE_RENDER_COMMAND(FReleaseMassBattleMinimapData)(
 		[Self](FRHICommandListImmediate& RHICmdList)
@@ -289,7 +302,10 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	FRHICommandListImmediate& RHICmdList,
 	const FMassBattleMinimapUploadData& UploadData)
 {
-	check(IsInRenderingThread());
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
 	static_assert(sizeof(FVector4f) == sizeof(float) * 4, "Unexpected FVector4f storage.");
 	static_assert(sizeof(FLinearColor) == sizeof(float) * 4, "Unexpected FLinearColor storage.");
 
@@ -333,11 +349,18 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	VisionRadiusUU_RenderThread = FMath::Max(UploadData.VisionRadiusUU, 0.0f);
 	UnitRadiusUU_RenderThread = FMath::Max(UploadData.UnitRadiusUU, 0.0f);
 	FogOpacity_RenderThread = FMath::Clamp(UploadData.FogOpacity, 0.0f, 1.0f);
+	CombatUnitColor_RenderThread = UploadData.CombatUnitColor;
+	NormalUnitColorLength_RenderThread = FMath::Max(UploadData.NormalUnitColorLength, 0.0f);
+	SelectedUnitColorLength_RenderThread = FMath::Max(UploadData.SelectedUnitColorLength, 0.0f);
+	bNormalizeTeamColorDirection_RenderThread = UploadData.bNormalizeTeamColorDirection;
 }
 
 void FMassBattleMinimapRenderData::Release_RenderThread()
 {
-	check(IsInRenderingThread());
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
 	AgentCount_RenderThread = 0;
 	VisionSourceCount_RenderThread = 0;
 	FogVisibleCount_RenderThread = 0;
@@ -352,7 +375,10 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 	const ICustomSlateElement::FDrawPassInputs& Inputs,
 	const FPaintGeometry& PaintGeometry)
 {
-	check(IsInRenderingThread());
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
 	if (Inputs.OutputTexture == nullptr)
 	{
 		return;
@@ -524,6 +550,14 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 		VSParameters.LogicalResolution = LogicalResolution_RenderThread;
 		VSParameters.UnitRadiusUU = UnitRadiusUU_RenderThread;
 		VSParameters.UnitBrightness = FMath::Clamp(1.0f - FogOpacity_RenderThread, 0.15f, 1.0f);
+		VSParameters.CombatUnitColor = FVector4f(
+			CombatUnitColor_RenderThread.R,
+			CombatUnitColor_RenderThread.G,
+			CombatUnitColor_RenderThread.B,
+			CombatUnitColor_RenderThread.A);
+		VSParameters.NormalUnitColorLength = NormalUnitColorLength_RenderThread;
+		VSParameters.SelectedUnitColorLength = SelectedUnitColorLength_RenderThread;
+		VSParameters.bNormalizeTeamColorDirection = bNormalizeTeamColorDirection_RenderThread ? 1u : 0u;
 		VSParameters.TeamColorCount = TeamColorCount_RenderThread;
 		VSParameters.UnitData = FogVisibleBuffer.SRV;
 		VSParameters.TeamColors = TeamColorsBuffer.SRV;
@@ -576,6 +610,14 @@ void FMassBattleMinimapRenderData::Draw_RenderThread(
 		VSParameters.LogicalResolution = LogicalResolution_RenderThread;
 		VSParameters.UnitRadiusUU = UnitRadiusUU_RenderThread;
 		VSParameters.UnitBrightness = 1.0f;
+		VSParameters.CombatUnitColor = FVector4f(
+			CombatUnitColor_RenderThread.R,
+			CombatUnitColor_RenderThread.G,
+			CombatUnitColor_RenderThread.B,
+			CombatUnitColor_RenderThread.A);
+		VSParameters.NormalUnitColorLength = NormalUnitColorLength_RenderThread;
+		VSParameters.SelectedUnitColorLength = SelectedUnitColorLength_RenderThread;
+		VSParameters.bNormalizeTeamColorDirection = bNormalizeTeamColorDirection_RenderThread ? 1u : 0u;
 		VSParameters.TeamColorCount = TeamColorCount_RenderThread;
 		VSParameters.UnitData = UnitDataBuffer.SRV;
 		VSParameters.TeamColors = TeamColorsBuffer.SRV;

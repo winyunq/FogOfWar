@@ -14,6 +14,10 @@ float2 MapSize;
 uint LogicalResolution;
 float UnitRadiusUU;
 float UnitBrightness;
+float4 CombatUnitColor;
+float NormalUnitColorLength;
+float SelectedUnitColorLength;
+uint bNormalizeTeamColorDirection;
 float VisionRadiusUU;
 uint TeamColorCount;
 float FogOpacity;
@@ -75,14 +79,31 @@ FUnitVSToPS UnitVS(uint VertexID : SV_VertexID, uint InstanceID : SV_InstanceID)
 {
 	FUnitVSToPS Output;
 	const float4 Unit = UnitData[InstanceID];
-	const uint TeamID = asuint(Unit.w) & 1023u;
+	const uint PackedState = asuint(Unit.w);
+	const uint TeamID = PackedState & 1023u;
+	const bool bAttacked = (PackedState & (1u << 10)) != 0u;
+	const bool bSelected = (PackedState & (1u << 11)) != 0u;
+	const bool bFullBrightness = (PackedState & (1u << 12)) != 0u;
 	const bool bValid = TeamID < TeamColorCount;
 	const float2 CenterPixel = WorldToWidgetPixel(Unit.xy);
 	const float2 DiameterPixels = RoundedParticleDiameterPixels(UnitRadiusUU);
 	const float2 PixelPosition = CenterPixel + (QuadCorners[VertexID] - 0.5) * DiameterPixels;
 	Output.Position = bValid ? PixelToClip(PixelPosition) : float4(-2.0, -2.0, 0.0, 1.0);
-	Output.Color = bValid ? TeamColors[TeamID] : 0.0.xxxx;
-	Output.Color.rgb *= UnitBrightness;
+	float4 TeamColor = bValid ? TeamColors[TeamID] : 0.0.xxxx;
+	if (bSelected)
+	{
+		// Keep the original team hue and marker size, but make selection obvious.
+		// The legacy strength parameters remain bound for hot-reload ABI stability,
+		// but they never normalize or darken an unselected marker.
+		const float SelectionBlend = bNormalizeTeamColorDirection != 0u
+			? saturate(SelectedUnitColorLength - NormalUnitColorLength)
+			: 0.40;
+		TeamColor.rgb = lerp(TeamColor.rgb, 1.0.xxx, SelectionBlend);
+	}
+	TeamColor.rgb *= bFullBrightness ? 1.0 : UnitBrightness;
+	// Combat is deliberately applied after fog brightness so a hit sample is
+	// unambiguously white even for an AlwaysFogVisible city marker.
+	Output.Color = bAttacked ? CombatUnitColor : TeamColor;
 	return Output;
 }
 

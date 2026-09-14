@@ -7,7 +7,10 @@ DEFINE_LOG_CATEGORY(LogManagerComponent);
 
 void UManagerComponent::Register(TSubclassOf<UObject> Class, UObject* Object)
 {
-	check(Object);
+	if (!Class || !Object)
+	{
+		return;
+	}
 
 	if (RegisteredMap.Contains(Class))
 	{

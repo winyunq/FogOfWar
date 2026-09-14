@@ -33,7 +33,7 @@ namespace UE::FogOfWar::Private
 		{
 			UE_LOG(
 				LogFogOfWar,
-				Fatal,
+				Error,
 				TEXT("FogOfWar DefaultMass.ini is missing required setting %s.%s."),
 				ConfigSection,
 				AutoRegisterPropertyName);
@@ -52,7 +52,8 @@ namespace UE::FogOfWar::Private
 			: nullptr;
 		if (!ProcessorCDO || !AutoRegisterProperty)
 		{
-			UE_LOG(LogFogOfWar, Fatal, TEXT("FogOfWar could not apply processor registration config for %s."), ConfigSection);
+			UE_LOG(LogFogOfWar, Error, TEXT("FogOfWar could not apply processor registration config for %s."), ConfigSection);
+			return;
 		}
 
 		AutoRegisterProperty->SetPropertyValue_InContainer(ProcessorCDO, bAutoRegister);
@@ -121,7 +122,8 @@ void FFogOfWarModule::InjectProcessorRegistrationConfig()
 	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("FogOfWar"));
 	if (!Plugin.IsValid())
 	{
-		UE_LOG(LogFogOfWar, Fatal, TEXT("FogOfWar plugin descriptor was unavailable while applying Mass processor config."));
+		UE_LOG(LogFogOfWar, Error, TEXT("FogOfWar plugin descriptor was unavailable while applying Mass processor config."));
+		return;
 	}
 
 	FConfigFile PluginMassConfig;
@@ -135,7 +137,8 @@ void FFogOfWarModule::InjectProcessorRegistrationConfig()
 	FString MassIniFilename;
 	if (!FConfigCacheIni::LoadGlobalIniFile(MassIniFilename, TEXT("Mass")) || !GConfig)
 	{
-		UE_LOG(LogFogOfWar, Fatal, TEXT("FogOfWar could not load the global Mass config cache."));
+		UE_LOG(LogFogOfWar, Error, TEXT("FogOfWar could not load the global Mass config cache."));
+		return;
 	}
 
 	GConfig->SetBool(
@@ -162,7 +165,8 @@ void FFogOfWarModule::AuditProcessorPipeline()
 	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("FogOfWar"));
 	if (!Plugin.IsValid())
 	{
-		UE_LOG(LogFogOfWar, Fatal, TEXT("FogOfWar plugin descriptor was unavailable while auditing the Mass processor pipeline."));
+		UE_LOG(LogFogOfWar, Error, TEXT("FogOfWar plugin descriptor was unavailable while auditing the Mass processor pipeline."));
+		return;
 	}
 
 	FConfigFile PluginMassConfig;
@@ -174,7 +178,7 @@ void FFogOfWarModule::AuditProcessorPipeline()
 
 	// Also covers CDOs that another module happened to instantiate before the
 	// early cache injection. If the phase list is already frozen, the audit
-	// below reports a fatal ownership violation instead of running either a
+	// below reports an ownership violation instead of running either a
 	// fallback or a dual-writer pipeline.
 	UE::FogOfWar::Private::ApplyProcessorCDORegistrationValue(
 		UE::FogOfWar::Private::OriginalRenderSection,
@@ -188,7 +192,8 @@ void FFogOfWarModule::AuditProcessorPipeline()
 	UMassEntitySettings* MassSettings = GetMutableDefault<UMassEntitySettings>();
 	if (!MassSettings)
 	{
-		UE_LOG(LogFogOfWar, Fatal, TEXT("FogOfWar could not audit UMassEntitySettings."));
+		UE_LOG(LogFogOfWar, Error, TEXT("FogOfWar could not audit UMassEntitySettings."));
+		return;
 	}
 
 	const TConstArrayView<FMassProcessingPhaseConfig> PhaseConfigs = MassSettings->GetProcessingPhasesConfig();
@@ -208,7 +213,7 @@ void FFogOfWarModule::AuditProcessorPipeline()
 	{
 		UE_LOG(
 			LogFogOfWar,
-			Fatal,
+			Error,
 			TEXT("Mass render pipeline ownership is invalid (OriginalRender=%s FogRender=%s). No compatibility or dual-writer mode is supported."),
 			bHasOriginalRender ? TEXT("Present") : TEXT("Absent"),
 			bHasFogRender ? TEXT("Present") : TEXT("Absent"));

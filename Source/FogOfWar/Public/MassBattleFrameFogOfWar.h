@@ -83,9 +83,6 @@ public:
 	void SetTemporaryVisionRadius(float InRadius);
 
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
-	void SetViewingTeamIndex(int32 InTeamIndex);
-
-	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
 	void SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices);
 
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
@@ -109,10 +106,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm"))
 	float TemporaryVisionRadius = 1024.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0", ClampMax = "1023", UIMin = "0", UIMax = "1023"))
-	int32 ViewingTeamIndex = 1;
-
-	/** Manual additions merged with allies resolved from URTSDiplomacySubsystem. */
+	/** Manual additions used when diplomacy has no hostile relation for that Team. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Team")
 	TArray<int32> AlliedTeamIndices;
 
@@ -175,7 +169,7 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Visibility Filter", meta = (ClampMin = "1", UIMin = "1"))
 	int32 CameraMaskGuardBandCells = 8;
 
-	/** Hard safety cap. Exceeding it is fatal; active fog never falls back to the unfiltered renderer. */
+	/** Hard safety cap for the camera-local visibility mask allocation. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Visibility Filter", meta = (ClampMin = "1", UIMin = "1"))
 	int32 MaxWorldMaskDimension = 4096;
 
@@ -203,7 +197,7 @@ private:
 	void DeactivateMassBattleFrameFog();
 	void ConfigureRenderFilter();
 	bool ResolveWorldMaskLayout();
-	bool EnsureWorldVisibilityMask();
+	void EnsureWorldVisibilityMask();
 	void ConsumeGpuMaskReadback();
 	void SetMassBattleFrameFogArrays();
 

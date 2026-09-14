@@ -238,7 +238,10 @@ FMassBattleFrameFogSceneViewExtension::~FMassBattleFrameFogSceneViewExtension() 
 
 void FMassBattleFrameFogSceneViewExtension::Upload_GameThread(FMassBattleFrameFogSceneUploadData&& UploadData)
 {
-	check(IsInGameThread());
+	if (!IsInGameThread())
+	{
+		return;
+	}
 	bEnabled_GameThread = UploadData.bEnabled;
 	TSharedRef<FMassBattleFrameFogSceneViewExtension, ESPMode::ThreadSafe> Self =
 		StaticCastSharedRef<FMassBattleFrameFogSceneViewExtension>(FSceneViewExtensionBase::AsShared());
@@ -267,7 +270,10 @@ void FMassBattleFrameFogSceneViewExtension::Release_GameThread()
 
 void FMassBattleFrameFogSceneViewExtension::ResolvePendingReadback_RenderThread()
 {
-	check(IsInRenderingThread());
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
 	if (!VisibilityStateReadback || !VisibilityStateReadback->IsReady())
 	{
 		return;
@@ -311,7 +317,10 @@ void FMassBattleFrameFogSceneViewExtension::Upload_RenderThread(
 	FRHICommandListImmediate& RHICmdList,
 	const FMassBattleFrameFogSceneUploadData& UploadData)
 {
-	check(IsInRenderingThread());
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
 	static_assert(sizeof(FVector4f) == sizeof(float) * 4, "Unexpected FVector4f storage.");
 
 	ResolvePendingReadback_RenderThread();
@@ -456,7 +465,10 @@ void FMassBattleFrameFogSceneViewExtension::Upload_RenderThread(
 
 void FMassBattleFrameFogSceneViewExtension::Release_RenderThread()
 {
-	check(IsInRenderingThread());
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
 	VisionSourcePositionBuffer.Release();
 	VisibilityStateReadback.Reset();
 	ReadbackMailbox_RenderThread.Reset();

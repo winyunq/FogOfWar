@@ -9,7 +9,11 @@
 
 struct FMassBattleMinimapUploadData
 {
-	/** float XYZ plus bit-cast uint Team in W; actual friendly/allied vision providers form a prefix. */
+	/**
+	 * Float XYZ plus a bit-cast uint in W: Team[0..9], Attacked[10], Selected[11],
+	 * FullBrightness[12].
+	 * Actual friendly/allied vision providers form a prefix.
+	 */
 	TArray<FVector4f> Units;
 	/** Fog-visible unit-only markers: attacks, permanent units, and remembered buildings. */
 	TArray<FVector4f> FogVisibleMarkers;
@@ -20,6 +24,10 @@ struct FMassBattleMinimapUploadData
 	float VisionRadiusUU = 4000.0f;
 	float UnitRadiusUU = 100.0f;
 	float FogOpacity = 0.3f;
+	FLinearColor CombatUnitColor = FLinearColor::White;
+	float NormalUnitColorLength = 0.58f;
+	float SelectedUnitColorLength = 1.0f;
+	bool bNormalizeTeamColorDirection = true;
 	int32 UnitCount = 0;
 	int32 VisionSourceCount = 0;
 };
@@ -53,6 +61,10 @@ private:
 	float VisionRadiusUU_RenderThread = 4000.0f;
 	float UnitRadiusUU_RenderThread = 100.0f;
 	float FogOpacity_RenderThread = 0.3f;
+	FLinearColor CombatUnitColor_RenderThread = FLinearColor::White;
+	float NormalUnitColorLength_RenderThread = 0.58f;
+	float SelectedUnitColorLength_RenderThread = 1.0f;
+	bool bNormalizeTeamColorDirection_RenderThread = true;
 	uint32 AgentCount_RenderThread = 0;
 	uint32 VisionSourceCount_RenderThread = 0;
 	uint32 FogVisibleCount_RenderThread = 0;

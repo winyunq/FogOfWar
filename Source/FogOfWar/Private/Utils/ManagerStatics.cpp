@@ -9,8 +9,6 @@
 
 UManagerComponent* UManagerStatics::GetGameManager(const UObject* WorldContextObject)
 {
-	auto GS = UGameplayStatics::GetGameState(WorldContextObject);
-	UManagerComponent* Manager = GS->GetComponentByClass<UManagerComponent>();
-	checkf(Manager, TEXT("Manager not found. Add ManagerComponent to the GameState"));
-	return Manager;
+	AGameStateBase* GameState = UGameplayStatics::GetGameState(WorldContextObject);
+	return GameState ? GameState->GetComponentByClass<UManagerComponent>() : nullptr;
 }

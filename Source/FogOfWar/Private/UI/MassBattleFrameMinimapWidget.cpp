@@ -14,6 +14,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Subsystems/MassBattleFogRenderSubsystem.h"
+#include "Subsystems/RTSDiplomacySubsystem.h"
 #include "TimerManager.h"
 #include "UI/MassBattleFrameMinimapSlate.h"
 
@@ -137,7 +138,7 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 
 	FMassBattleMinimapUploadData UploadData;
 
-	RenderFilter->ConfigureStandaloneMinimapTeams(ViewingTeamIndex, AlliedTeamIndices);
+	RenderFilter->ConfigureStandaloneMinimapTeams(AlliedTeamIndices);
 
 	int32 FriendlySourceCount = 0;
 	RenderFilter->CopyLatestMinimapSnapshot(
@@ -164,11 +165,30 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 	const FVector MapCenter3D = MapRegionTransform.GetLocation();
 	const FVector2D MapMin(MapCenter3D.X - MapWorldSize.X * 0.5f, MapCenter3D.Y - MapWorldSize.Y * 0.5f);
 	UploadData.TeamColors = TeamColors;
+	if (bRelationColorsEnabled)
+	{
+		const URTSDiplomacySubsystem* Diplomacy = GetWorld()->GetSubsystem<URTSDiplomacySubsystem>();
+		const auto Snapshot = Diplomacy ? Diplomacy->GetSnapshot() : nullptr;
+		const int32 Viewer = RenderFilter->GetViewingTeamIndex();
+		for (int32 Team = 0; Team < UploadData.TeamColors.Num(); ++Team)
+		{
+			const ERTSTeamRelation Relation = Snapshot.IsValid()
+				? Snapshot->GetRelation(Viewer, Team) : ERTSTeamRelation::Neutral;
+			UploadData.TeamColors[Team] = Team == Viewer ? FLinearColor(0.1f, 1.0f, 0.2f)
+				: Relation == ERTSTeamRelation::Hostile ? FLinearColor(1.0f, 0.05f, 0.03f)
+				: Relation == ERTSTeamRelation::Allied ? FLinearColor(0.05f, 0.4f, 1.0f)
+				: FLinearColor(1.0f, 0.8f, 0.15f);
+		}
+	}
 	UploadData.MapMin = FVector2f(MapMin);
 	UploadData.MapSize = FVector2f(MapWorldSize);
 	UploadData.LogicalResolution = MinimapResolution;
 	UploadData.VisionRadiusUU = VisionRadiusUU;
 	UploadData.UnitRadiusUU = UnitRadiusUU;
+	UploadData.CombatUnitColor = CombatUnitColor;
+	UploadData.NormalUnitColorLength = NormalUnitColorLength;
+	UploadData.SelectedUnitColorLength = SelectedUnitColorLength;
+	UploadData.bNormalizeTeamColorDirection = bNormalizeTeamColorDirection;
 	// Minimap readability is independent from the stronger scene-fog treatment.
 	// Both views still consume the same visibility state; only presentation opacity differs.
 	UploadData.FogOpacity = FogDarkenOpacity;
@@ -278,6 +298,7 @@ void UMassBattleFrameMinimapWidget::LoadTeamColorsFromConfig()
 	{
 		IniFile.Read(IniPath);
 		ReadMinimapColor(IniFile, TEXT("DefaultTeamColor"), DefaultTeamColor);
+		ReadMinimapColor(IniFile, TEXT("CombatUnitColor"), CombatUnitColor);
 	}
 
 	// DynamicParams0.W contributes only ten Team-ID bits. Filling the complete lookup
@@ -342,12 +363,6 @@ void UMassBattleFrameMinimapWidget::SetUnitRadiusUU(const float InRadiusUU)
 	PushMassBattleFrameMinimapFrame();
 }
 
-void UMassBattleFrameMinimapWidget::SetViewingTeamIndex(const int32 InTeamIndex)
-{
-	ViewingTeamIndex = FMath::Clamp(InTeamIndex, 0, TeamIdLookupSize - 1);
-	PushMassBattleFrameMinimapFrame();
-}
-
 void UMassBattleFrameMinimapWidget::SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices)
 {
 	AlliedTeamIndices.Reset(InAlliedTeamIndices.Num());
@@ -355,6 +370,12 @@ void UMassBattleFrameMinimapWidget::SetAlliedTeamIndices(const TArray<int32>& In
 	{
 		AlliedTeamIndices.AddUnique(FMath::Clamp(TeamIndex, 0, TeamIdLookupSize - 1));
 	}
+	PushMassBattleFrameMinimapFrame();
+}
+
+void UMassBattleFrameMinimapWidget::SetRelationColorsEnabled(bool bEnabled)
+{
+	bRelationColorsEnabled = bEnabled;
 	PushMassBattleFrameMinimapFrame();
 }
 

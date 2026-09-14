@@ -39,10 +39,6 @@ namespace
 		};
 
 		AddFriendlyTeam(ViewingTeamIndex);
-		for (const int32 AlliedTeamIndex : ExplicitAlliedTeamIndices)
-		{
-			AddFriendlyTeam(AlliedTeamIndex);
-		}
 
 		const URTSDiplomacySubsystem* Diplomacy = World
 			? World->GetSubsystem<URTSDiplomacySubsystem>()
@@ -52,16 +48,28 @@ namespace
 			: nullptr;
 		if (!Snapshot.IsValid())
 		{
+			for (const int32 AlliedTeamIndex : ExplicitAlliedTeamIndices)
+			{
+				AddFriendlyTeam(AlliedTeamIndex);
+			}
 			return;
 		}
 
 		OutDiplomacyRevision = Snapshot->Revision;
-		const int32 TeamLimit = Snapshot->DefaultDifferentTeamRelation == ERTSTeamRelation::Allied
+		for (const int32 AlliedTeamIndex : ExplicitAlliedTeamIndices)
+		{
+			if (Snapshot->GetRelation(ViewingTeamIndex, AlliedTeamIndex) != ERTSTeamRelation::Hostile)
+			{
+				AddFriendlyTeam(AlliedTeamIndex);
+			}
+		}
+
+		const int32 TeamLimit = Snapshot->DefaultDifferentTeamRelation != ERTSTeamRelation::Hostile
 			? UMassBattleFogRenderSubsystem::TeamCount
 			: FMath::Min(Snapshot->Stride, UMassBattleFogRenderSubsystem::TeamCount);
 		for (int32 CandidateTeamIndex = 0; CandidateTeamIndex < TeamLimit; ++CandidateTeamIndex)
 		{
-			if (Snapshot->GetRelation(ViewingTeamIndex, CandidateTeamIndex) == ERTSTeamRelation::Allied)
+			if (Snapshot->GetRelation(ViewingTeamIndex, CandidateTeamIndex) != ERTSTeamRelation::Hostile)
 			{
 				AddFriendlyTeam(CandidateTeamIndex);
 			}
@@ -69,10 +77,67 @@ namespace
 	}
 }
 
+bool UMassBattleFogRenderSubsystem::RefreshFriendlyTeamMask()
+{
+	TArray<uint32> NewFriendlyTeamMaskWords;
+	uint32 NewDiplomacyRevision = 0;
+	int32 NewFriendlyTeamCount = 0;
+	BuildFriendlyTeamMask(
+		GetWorld(),
+		ViewingTeamIndex,
+		ExplicitAlliedTeamIndices,
+		NewFriendlyTeamMaskWords,
+		NewDiplomacyRevision,
+		NewFriendlyTeamCount);
+
+	const bool bTeamMaskChanged = FriendlyTeamMaskWords != NewFriendlyTeamMaskWords;
+	FriendlyTeamMaskWords = MoveTemp(NewFriendlyTeamMaskWords);
+	DiplomacyRevision = NewDiplomacyRevision;
+	FriendlyTeamCount = NewFriendlyTeamCount;
+	if (bTeamMaskChanged)
+	{
+		UE_LOG(LogFogOfWar, Log,
+			TEXT("Resolved fog vision teams: viewing team=%d non-hostile teams=%d diplomacy revision=%u."),
+			ViewingTeamIndex,
+			FriendlyTeamCount,
+			DiplomacyRevision);
+	}
+	return bTeamMaskChanged;
+}
+
+void UMassBattleFogRenderSubsystem::SetViewingTeamIndex(const int32 InTeamIndex)
+{
+	const int32 NewViewingTeamIndex = FMath::Clamp(InTeamIndex, 0, TeamCount - 1);
+	if (ViewingTeamIndex == NewViewingTeamIndex)
+	{
+		return;
+	}
+
+	ViewingTeamIndex = NewViewingTeamIndex;
+	if (!RefreshFriendlyTeamMask())
+	{
+		return;
+	}
+
+	bMaskReady = false;
+	bVisionSourceSampleRequested = true;
+	bVisionSourceCollectionRequested = true;
+	bMinimapSnapshotCollectionRequested = true;
+	++VisionCollectionRevision;
+	if (VisionCollectionRevision == 0)
+	{
+		++VisionCollectionRevision;
+	}
+	++RenderWorkSetRevision;
+	if (RenderWorkSetRevision == 0)
+	{
+		++RenderWorkSetRevision;
+	}
+}
+
 void UMassBattleFogRenderSubsystem::Configure(
 	const bool bInSceneActive,
 	const bool bInDebugRevealAll,
-	const int32 InViewingTeamIndex,
 	const TArray<int32>& InAlliedTeamIndices,
 	const float InVisionRadiusUU,
 	const float InFogOpacity,
@@ -97,29 +162,8 @@ void UMassBattleFogRenderSubsystem::Configure(
 	UnitVisibilityConvergenceRateHz = FMath::Max(0.0f, InUnitVisibilityConvergenceRateHz);
 	UnitVisibilityRemovalDelay = FMath::Max(0.0f, InUnitVisibilityRemovalDelay);
 
-	TArray<uint32> NewFriendlyTeamMaskWords;
-	uint32 NewDiplomacyRevision = 0;
-	int32 NewFriendlyTeamCount = 0;
-	BuildFriendlyTeamMask(
-		GetWorld(),
-		InViewingTeamIndex,
-		InAlliedTeamIndices,
-		NewFriendlyTeamMaskWords,
-		NewDiplomacyRevision,
-		NewFriendlyTeamCount);
-
-	const bool bTeamMaskChanged = FriendlyTeamMaskWords != NewFriendlyTeamMaskWords;
-	FriendlyTeamMaskWords = MoveTemp(NewFriendlyTeamMaskWords);
-	DiplomacyRevision = NewDiplomacyRevision;
-	FriendlyTeamCount = NewFriendlyTeamCount;
-	if (bTeamMaskChanged)
-	{
-		UE_LOG(LogFogOfWar, Log,
-			TEXT("Resolved fog vision teams: viewing team=%d friendly teams=%d diplomacy revision=%u."),
-			InViewingTeamIndex,
-			FriendlyTeamCount,
-			DiplomacyRevision);
-	}
+	ExplicitAlliedTeamIndices = InAlliedTeamIndices;
+	const bool bTeamMaskChanged = RefreshFriendlyTeamMask();
 	const bool bVisionDefinitionChanged = bTeamMaskChanged
 		|| !FMath::IsNearlyEqual(OldVisionRadiusUU, VisionRadiusUU);
 	if ((!bWasActive && bActive) || bVisionDefinitionChanged)
@@ -269,7 +313,6 @@ bool UMassBattleFogRenderSubsystem::IsFriendlyTeam(const int32 TeamIndex) const
 }
 
 void UMassBattleFogRenderSubsystem::ConfigureStandaloneMinimapTeams(
-	const int32 InViewingTeamIndex,
 	const TArray<int32>& InAlliedTeamIndices)
 {
 	if (bActive)
@@ -277,29 +320,16 @@ void UMassBattleFogRenderSubsystem::ConfigureStandaloneMinimapTeams(
 		return;
 	}
 
-	TArray<uint32> NewFriendlyTeamMaskWords;
-	uint32 NewDiplomacyRevision = 0;
-	int32 NewFriendlyTeamCount = 0;
-	BuildFriendlyTeamMask(
-		GetWorld(),
-		InViewingTeamIndex,
-		InAlliedTeamIndices,
-		NewFriendlyTeamMaskWords,
-		NewDiplomacyRevision,
-		NewFriendlyTeamCount);
-
-	if (FriendlyTeamMaskWords != NewFriendlyTeamMaskWords)
+	ExplicitAlliedTeamIndices = InAlliedTeamIndices;
+	if (RefreshFriendlyTeamMask())
 	{
-		FriendlyTeamMaskWords = MoveTemp(NewFriendlyTeamMaskWords);
+		++RenderWorkSetRevision;
+		if (RenderWorkSetRevision == 0)
+		{
+			++RenderWorkSetRevision;
+		}
 		bMinimapSnapshotCollectionRequested = true;
-		UE_LOG(LogFogOfWar, Log,
-			TEXT("Resolved standalone minimap vision teams: viewing team=%d friendly teams=%d diplomacy revision=%u."),
-			InViewingTeamIndex,
-			NewFriendlyTeamCount,
-			NewDiplomacyRevision);
 	}
-	DiplomacyRevision = NewDiplomacyRevision;
-	FriendlyTeamCount = NewFriendlyTeamCount;
 }
 
 void UMassBattleFogRenderSubsystem::RequestVisionSourceCollection()
