@@ -134,7 +134,7 @@ void AMassBattleFrameFogOfWar::PushMassBattleFrameFogParameters()
 		LastPerfStats.bUnitFilterActive = RenderFilter->IsFilteringActive();
 		LastPerfStats.ActiveProxyCount = RenderFilter->GetActiveProxyCount();
 		LastPerfStats.NiagaraUploadElementCount = RenderFilter->GetUploadedElementCount();
-		PerfViewingTeamIndex = RenderFilter->GetViewingTeamIndex();
+		PerfViewingTeamIndex = RenderFilter->GetLocalPlayerTeamIndex();
 	}
 	else
 	{
@@ -246,17 +246,6 @@ void AMassBattleFrameFogOfWar::SetTemporaryVisionRadius(const float InRadius)
 	PushMassBattleFrameFogParameters();
 }
 
-void AMassBattleFrameFogOfWar::SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices)
-{
-	AlliedTeamIndices.Reset(InAlliedTeamIndices.Num());
-	for (const int32 TeamIndex : InAlliedTeamIndices)
-	{
-		AlliedTeamIndices.AddUnique(FMath::Clamp(TeamIndex, 0, 1023));
-	}
-	bForceLogicMaskUpdate = true;
-	PushMassBattleFrameFogParameters();
-}
-
 void AMassBattleFrameFogOfWar::SetFogOpacity(const float InOpacity)
 {
 	FogOpacity = FMath::Clamp(InOpacity, 0.0f, 1.0f);
@@ -288,7 +277,6 @@ void AMassBattleFrameFogOfWar::ConfigureRenderFilter()
 	RenderFilter->Configure(
 		bFogActive,
 		bDebugRevealAll,
-		AlliedTeamIndices,
 		TemporaryVisionRadius,
 		FogOpacity,
 		WorldMaskMin,

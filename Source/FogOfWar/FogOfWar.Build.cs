@@ -1,12 +1,15 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 using UnrealBuildTool;
+using System.IO;
 
 public class FogOfWar : ModuleRules
 {
 	public FogOfWar(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+		PrivateIncludePaths.Add(Path.Combine(EngineDirectory, "Source/Runtime/Renderer/Private"));
+		PrivateIncludePaths.Add(Path.Combine(EngineDirectory, "Source/Runtime/Renderer/Internal"));
 		
 		PublicIncludePaths.AddRange(
 			new string[] {
@@ -50,7 +53,6 @@ public class FogOfWar : ModuleRules
 				"Renderer",
 				"Slate",
 				"SlateCore",
-				"MassBattleRTSDiplomacy",
 				"MassCommon",
 				"UMG", // Needed for UUserWidget
 				"Niagara",

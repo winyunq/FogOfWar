@@ -284,6 +284,22 @@ void FMassBattleMinimapRenderData::Upload_GameThread(FMassBattleMinimapUploadDat
 		});
 }
 
+void FMassBattleMinimapRenderData::UploadTeamColors_GameThread(const TConstArrayView<FLinearColor> InTeamColors)
+{
+	if (!IsInGameThread())
+	{
+		return;
+	}
+
+	TArray<FLinearColor> TeamColors(InTeamColors);
+	TSharedRef<FMassBattleMinimapRenderData, ESPMode::ThreadSafe> Self = AsShared();
+	ENQUEUE_RENDER_COMMAND(FUploadMassBattleMinimapTeamColors)(
+		[Self, Colors = MoveTemp(TeamColors)](FRHICommandListImmediate& RHICmdList) mutable
+		{
+			Self->UploadTeamColors_RenderThread(RHICmdList, MoveTemp(Colors));
+		});
+}
+
 void FMassBattleMinimapRenderData::Release_GameThread()
 {
 	if (!IsInGameThread())
@@ -313,7 +329,6 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	AgentCount_RenderThread = static_cast<uint32>(FMath::Clamp(UploadData.UnitCount, 0, AvailableSourceCount));
 	VisionSourceCount_RenderThread = static_cast<uint32>(FMath::Clamp(UploadData.VisionSourceCount, 0, AvailableSourceCount));
 	FogVisibleCount_RenderThread = static_cast<uint32>(UploadData.FogVisibleMarkers.Num());
-	TeamColorCount_RenderThread = static_cast<uint32>(UploadData.TeamColors.Num());
 
 	InitializeReadBuffer(
 		RHICmdList,
@@ -333,16 +348,6 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 		PF_A32B32G32R32F,
 		UploadData.FogVisibleMarkers.GetData(),
 		static_cast<uint32>(UploadData.FogVisibleMarkers.Num() * sizeof(FVector4f)));
-	InitializeReadBuffer(
-		RHICmdList,
-		TeamColorsBuffer,
-		TEXT("MassBattleMinimap.TeamColors"),
-		sizeof(FLinearColor),
-		TeamColorCount_RenderThread,
-		PF_A32B32G32R32F,
-		UploadData.TeamColors.GetData(),
-		static_cast<uint32>(UploadData.TeamColors.Num() * sizeof(FLinearColor)));
-
 	MapMin_RenderThread = UploadData.MapMin;
 	MapSize_RenderThread = UploadData.MapSize.ComponentMax(FVector2f(1.0f, 1.0f));
 	LogicalResolution_RenderThread = static_cast<uint32>(FMath::Max(UploadData.LogicalResolution, 1));
@@ -353,6 +358,27 @@ void FMassBattleMinimapRenderData::Upload_RenderThread(
 	NormalUnitColorLength_RenderThread = FMath::Max(UploadData.NormalUnitColorLength, 0.0f);
 	SelectedUnitColorLength_RenderThread = FMath::Max(UploadData.SelectedUnitColorLength, 0.0f);
 	bNormalizeTeamColorDirection_RenderThread = UploadData.bNormalizeTeamColorDirection;
+}
+
+void FMassBattleMinimapRenderData::UploadTeamColors_RenderThread(
+	FRHICommandListImmediate& RHICmdList,
+	TArray<FLinearColor>&& InTeamColors)
+{
+	if (!IsInRenderingThread())
+	{
+		return;
+	}
+
+	TeamColorCount_RenderThread = static_cast<uint32>(InTeamColors.Num());
+	InitializeReadBuffer(
+		RHICmdList,
+		TeamColorsBuffer,
+		TEXT("MassBattleMinimap.TeamColors"),
+		sizeof(FLinearColor),
+		TeamColorCount_RenderThread,
+		PF_A32B32G32R32F,
+		InTeamColors.GetData(),
+		static_cast<uint32>(InTeamColors.Num() * sizeof(FLinearColor)));
 }
 
 void FMassBattleMinimapRenderData::Release_RenderThread()

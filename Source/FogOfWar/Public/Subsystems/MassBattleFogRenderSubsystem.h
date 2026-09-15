@@ -28,17 +28,19 @@ public:
 	static constexpr int32 TeamCount = 1024;
 	static constexpr int32 TeamWordCount = TeamCount / 32;
 
-	/** World-authoritative local observer identity shared by scene fog and minimap. */
+	/** World-authoritative local player Team shared by scene fog and minimap. */
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|Teams")
-	void SetViewingTeamIndex(int32 InTeamIndex);
+	void SetLocalPlayerTeamIndex(int32 InTeamIndex);
 
 	UFUNCTION(BlueprintPure, Category = "FogOfWar|Teams")
-	int32 GetViewingTeamIndex() const { return ViewingTeamIndex; }
+	int32 GetLocalPlayerTeamIndex() const { return ViewingTeamIndex; }
+
+	UFUNCTION(BlueprintCallable, Category = "FogOfWar|Teams")
+	void SetViewingTeamIndices(const TArray<int32>& InViewingTeamIndices);
 
 	void Configure(
 		bool bInSceneActive,
 		bool bInDebugRevealAll,
-		const TArray<int32>& InAlliedTeamIndices,
 		float InVisionRadiusUU,
 		float InFogOpacity,
 		const FVector2D& InMaskWorldMin,
@@ -68,8 +70,6 @@ public:
 	bool IsInsideRenderWindow(const FVector& WorldLocation) const;
 
 	bool IsFriendlyTeam(int32 TeamIndex) const;
-	/** Used only when no active scene-fog controller owns the relationship. */
-	void ConfigureStandaloneMinimapTeams(const TArray<int32>& InAlliedTeamIndices);
 
 	// The scene controller requests a source snapshot at its own update rate.
 	// Source membership is rebuilt with the low-frequency camera/logic filter;
@@ -132,7 +132,6 @@ public:
 	float GetFogOpacity() const { return FogOpacity; }
 	float GetUnitVisibilityConvergenceRateHz() const { return UnitVisibilityConvergenceRateHz; }
 	float GetUnitVisibilityRemovalDelay() const { return UnitVisibilityRemovalDelay; }
-	uint32 GetDiplomacyRevision() const { return DiplomacyRevision; }
 	int32 GetFriendlyTeamCount() const { return FriendlyTeamCount; }
 	bool IsMaskReady() const { return bMaskReady; }
 	uint32 GetMaskGeneration() const { return MaskGeneration; }
@@ -156,11 +155,10 @@ private:
 
 	int32 WorldToMaskIndex(const FVector& WorldLocation) const;
 	bool IsInsideRequestedCameraWindow(const FVector& WorldLocation) const;
-	bool RefreshFriendlyTeamMask();
+	bool SetFriendlyTeamMask(TConstArrayView<int32> InFriendlyTeamIndices);
 
 	TArray<uint8> VisibilityStateCells;
 	TArray<uint32> FriendlyTeamMaskWords;
-	TArray<int32> ExplicitAlliedTeamIndices;
 	TArray<FVector4f> LatestVisionSources;
 	TArray<FVector4f> LatestMinimapUnits;
 	TArray<FVector4f> LatestMinimapFogVisibleUnits;
@@ -178,7 +176,6 @@ private:
 	float AttackRevealDuration = 2.0f;
 	float UnitVisibilityConvergenceRateHz = 3.0f;
 	float UnitVisibilityRemovalDelay = 0.333333f;
-	uint32 DiplomacyRevision = 0;
 	int32 FriendlyTeamCount = 0;
 	int32 ViewingTeamIndex = 1;
 	uint32 MaskGeneration = 0;

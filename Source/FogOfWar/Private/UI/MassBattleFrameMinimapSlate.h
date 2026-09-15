@@ -17,7 +17,6 @@ struct FMassBattleMinimapUploadData
 	TArray<FVector4f> Units;
 	/** Fog-visible unit-only markers: attacks, permanent units, and remembered buildings. */
 	TArray<FVector4f> FogVisibleMarkers;
-	TArray<FLinearColor> TeamColors;
 	FVector2f MapMin = FVector2f::ZeroVector;
 	FVector2f MapSize = FVector2f(1.0f, 1.0f);
 	int32 LogicalResolution = 256;
@@ -41,7 +40,11 @@ public:
 	~FMassBattleMinimapRenderData();
 
 	void Upload_GameThread(FMassBattleMinimapUploadData&& UploadData);
+	/** Event-driven color upload; unit/fog snapshot uploads never replace this buffer. */
+	void UploadTeamColors_GameThread(TConstArrayView<FLinearColor> InTeamColors);
 	void Release_GameThread();
+	FRHIShaderResourceView* GetTeamColorsSRV_RenderThread() const { return TeamColorsBuffer.SRV; }
+	uint32 GetTeamColorCount_RenderThread() const { return TeamColorCount_RenderThread; }
 	void Draw_RenderThread(
 		FRDGBuilder& GraphBuilder,
 		const ICustomSlateElement::FDrawPassInputs& Inputs,
@@ -49,6 +52,7 @@ public:
 
 private:
 	void Upload_RenderThread(FRHICommandListImmediate& RHICmdList, const FMassBattleMinimapUploadData& UploadData);
+	void UploadTeamColors_RenderThread(FRHICommandListImmediate& RHICmdList, TArray<FLinearColor>&& InTeamColors);
 	void Release_RenderThread();
 
 	FReadBuffer UnitDataBuffer;
@@ -98,3 +102,6 @@ private:
 	FMassBattleMinimapRenderDataPtr RenderData;
 	TSharedPtr<ICustomSlateElement, ESPMode::ThreadSafe> CustomDrawer;
 };
+
+class FSceneInterface;
+void BindMassBattleTeamColorsToScene(FSceneInterface* Scene, FMassBattleMinimapRenderDataPtr RenderData);

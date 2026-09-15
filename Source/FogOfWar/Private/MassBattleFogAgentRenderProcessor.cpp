@@ -2467,7 +2467,7 @@ void UMassBattleFogAgentRenderProcessor::Execute(FMassEntityManager& EntityManag
 							|| Flags[Index].HasFlag(HitAnimFlag));
 					// Reuse the authoritative selection state exactly as it already exists.
 					// The minimap adds only a presentation bit; it introduces no new sync data.
-					const bool bSelected = TeamIndex == FogRenderSubsystem->GetViewingTeamIndex()
+					const bool bSelected = TeamIndex == FogRenderSubsystem->GetLocalPlayerTeamIndex()
 						&& Flags[Index].HasFlag(SelectedFlag);
 					const bool bAlwaysFogVisible =
 						VisibilityPolicy == EMassBattleFogVisibilityPolicy::AlwaysFogVisible;

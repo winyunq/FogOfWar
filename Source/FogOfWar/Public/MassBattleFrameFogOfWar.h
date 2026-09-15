@@ -83,9 +83,6 @@ public:
 	void SetTemporaryVisionRadius(float InRadius);
 
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
-	void SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices);
-
-	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
 	void SetFogOpacity(float InOpacity);
 
 	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame")
@@ -105,10 +102,6 @@ protected:
 	/** Unified scene/minimap/render-filter radius. One radius keeps the cache compact and deterministic. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm"))
 	float TemporaryVisionRadius = 1024.0f;
-
-	/** Manual additions used when diplomacy has no hostile relation for that Team. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Team")
-	TArray<int32> AlliedTeamIndices;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "FogOfWar|MassBattleFrame|Parameters", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
 	float FogOpacity = 0.3f;

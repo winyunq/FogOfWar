@@ -103,11 +103,11 @@ HashGrid 对齐 PF_G8 逻辑图默认 `3 Hz`，只服务表现后端的一次异
 
 ## 玩家与盟友
 
-- FogOfWar 不依赖输入或相机插件；游戏层只调用世界 `UMassBattleFogRenderSubsystem::SetViewingTeamIndex()`，场景雾和小地图共同使用该观察阵营。
-- 关系来自当前世界 `URTSDiplomacySubsystem::GetSnapshot()`；`Neutral` 和 `Allied` 共享视野，`Hostile`（宣战）立即停止共享。
-- `AlliedTeamIndices` 保留为无外交快照时的手工追加项；有效外交快照中的 `Hostile` 关系优先，手工项不能绕过宣战断视野。
+- FogOfWar 不依赖输入、相机或外交插件；游戏层通过 `URTSDiplomacySubsystem::SetLocalPlayerTeamIndex()` 设置本地玩家阵营，场景雾和小地图共同使用它。
+- 外交子系统在每次关系修改完成后，直接向 Fog 推送当前观察阵营的友军 Team 集合；Fog 不读取、不订阅也不轮询外交快照。`Neutral` 和 `Allied` 共享视野，`Hostile`（宣战）立即停止共享。
+- 没有外交插件时，游戏层可直接调用 `UMassBattleFogRenderSubsystem::SetViewingTeamIndices()` 提供可共享视野的 Team 集合。
 - 场景与小地图共享同一份玩家/盟友位掩码、统一视野半径和单位类型策略。
-- 外交扫描只读取当前玩家的一行小型 Team 关系矩阵；关系修订后在下一次 `24 Hz` 场景配置或 `3 Hz` 小地图配置时生效，不查询也不遍历单位。
+- 关系变更在同一游戏线程调用内生效，不查询也不遍历单位。
 - 东亚 `PVE_R_1936` 中 Team `2/3/4/5` 同属 Alliance `100`，因此任意一方作为本地玩家时都会合并其余三方的视野源。
 
 ## Processor 接管

@@ -14,7 +14,6 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Subsystems/MassBattleFogRenderSubsystem.h"
-#include "Subsystems/RTSDiplomacySubsystem.h"
 #include "TimerManager.h"
 #include "UI/MassBattleFrameMinimapSlate.h"
 
@@ -63,7 +62,6 @@ namespace
 UMassBattleFrameMinimapWidget::UMassBattleFrameMinimapWidget(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
-	TeamColors.Init(DefaultTeamColor, TeamIdLookupSize);
 }
 
 #if WITH_EDITOR
@@ -111,7 +109,6 @@ void UMassBattleFrameMinimapWidget::NativeDestruct()
 bool UMassBattleFrameMinimapWidget::InitializeMassBattleFrameMinimap()
 {
 	const bool bHasMapRegion = ResolveMapRegion();
-	LoadTeamColorsFromConfig();
 	if (!RenderData.IsValid())
 	{
 		RenderData = MakeShared<FMassBattleMinimapRenderData, ESPMode::ThreadSafe>();
@@ -138,8 +135,6 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 
 	FMassBattleMinimapUploadData UploadData;
 
-	RenderFilter->ConfigureStandaloneMinimapTeams(AlliedTeamIndices);
-
 	int32 FriendlySourceCount = 0;
 	RenderFilter->CopyLatestMinimapSnapshot(
 		UploadData.Units,
@@ -164,22 +159,6 @@ bool UMassBattleFrameMinimapWidget::PushMassBattleFrameMinimapFrame()
 
 	const FVector MapCenter3D = MapRegionTransform.GetLocation();
 	const FVector2D MapMin(MapCenter3D.X - MapWorldSize.X * 0.5f, MapCenter3D.Y - MapWorldSize.Y * 0.5f);
-	UploadData.TeamColors = TeamColors;
-	if (bRelationColorsEnabled)
-	{
-		const URTSDiplomacySubsystem* Diplomacy = GetWorld()->GetSubsystem<URTSDiplomacySubsystem>();
-		const auto Snapshot = Diplomacy ? Diplomacy->GetSnapshot() : nullptr;
-		const int32 Viewer = RenderFilter->GetViewingTeamIndex();
-		for (int32 Team = 0; Team < UploadData.TeamColors.Num(); ++Team)
-		{
-			const ERTSTeamRelation Relation = Snapshot.IsValid()
-				? Snapshot->GetRelation(Viewer, Team) : ERTSTeamRelation::Neutral;
-			UploadData.TeamColors[Team] = Team == Viewer ? FLinearColor(0.1f, 1.0f, 0.2f)
-				: Relation == ERTSTeamRelation::Hostile ? FLinearColor(1.0f, 0.05f, 0.03f)
-				: Relation == ERTSTeamRelation::Allied ? FLinearColor(0.05f, 0.4f, 1.0f)
-				: FLinearColor(1.0f, 0.8f, 0.15f);
-		}
-	}
 	UploadData.MapMin = FVector2f(MapMin);
 	UploadData.MapSize = FVector2f(MapWorldSize);
 	UploadData.LogicalResolution = MinimapResolution;
@@ -290,20 +269,20 @@ void UMassBattleFrameMinimapWidget::ApplyBaseMapTextureFromConfig()
 		*TexturePath);
 }
 
-void UMassBattleFrameMinimapWidget::LoadTeamColorsFromConfig()
+void UMassBattleFrameMinimapWidget::LoadConfiguredTeamColors(TArray<FLinearColor>& OutTeamColors) const
 {
 	FConfigFile IniFile;
 	const FString IniPath = GetMinimapColorPath(GetWorld());
+	FLinearColor ConfiguredDefaultTeamColor = DefaultTeamColor;
 	if (FPaths::FileExists(IniPath))
 	{
 		IniFile.Read(IniPath);
-		ReadMinimapColor(IniFile, TEXT("DefaultTeamColor"), DefaultTeamColor);
-		ReadMinimapColor(IniFile, TEXT("CombatUnitColor"), CombatUnitColor);
+		ReadMinimapColor(IniFile, TEXT("DefaultTeamColor"), ConfiguredDefaultTeamColor);
 	}
 
 	// DynamicParams0.W contributes only ten Team-ID bits. Filling the complete lookup
 	// makes every missing TeamColorN entry resolve to the configured default color.
-	TeamColors.Init(DefaultTeamColor, TeamIdLookupSize);
+	OutTeamColors.Init(ConfiguredDefaultTeamColor, TeamIdLookupSize);
 	if (!FPaths::FileExists(IniPath))
 	{
 		return;
@@ -325,10 +304,10 @@ void UMassBattleFrameMinimapWidget::LoadTeamColorsFromConfig()
 	TeamColorCount = FMath::Clamp(TeamColorCount, 0, TeamIdLookupSize);
 	for (int32 Index = 0; Index < TeamColorCount; ++Index)
 	{
-		FLinearColor TeamColor = DefaultTeamColor;
+		FLinearColor TeamColor = ConfiguredDefaultTeamColor;
 		if (ReadMinimapColor(IniFile, *FString::Printf(TEXT("TeamColor%d"), Index), TeamColor))
 		{
-			TeamColors[Index] = TeamColor;
+			OutTeamColors[Index] = TeamColor;
 		}
 	}
 }
@@ -363,20 +342,17 @@ void UMassBattleFrameMinimapWidget::SetUnitRadiusUU(const float InRadiusUU)
 	PushMassBattleFrameMinimapFrame();
 }
 
-void UMassBattleFrameMinimapWidget::SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices)
+void UMassBattleFrameMinimapWidget::CommitTeamColors(const TConstArrayView<FLinearColor> InTeamColors)
 {
-	AlliedTeamIndices.Reset(InAlliedTeamIndices.Num());
-	for (const int32 TeamIndex : InAlliedTeamIndices)
+	if (InTeamColors.Num() != TeamIdLookupSize)
 	{
-		AlliedTeamIndices.AddUnique(FMath::Clamp(TeamIndex, 0, TeamIdLookupSize - 1));
+		return;
 	}
-	PushMassBattleFrameMinimapFrame();
-}
-
-void UMassBattleFrameMinimapWidget::SetRelationColorsEnabled(bool bEnabled)
-{
-	bRelationColorsEnabled = bEnabled;
-	PushMassBattleFrameMinimapFrame();
+	if (RenderData.IsValid())
+	{
+		BindMassBattleTeamColorsToScene(GetWorld() ? GetWorld()->Scene : nullptr, RenderData);
+		RenderData->UploadTeamColors_GameThread(InTeamColors);
+	}
 }
 
 bool UMassBattleFrameMinimapWidget::ResolveMapRegion()

@@ -78,14 +78,10 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintPure, Category = "FogOfWar|MassBattleFrame Minimap")
 	float GetUnitRadiusUU() const { return UnitRadiusUU; }
 
-	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame Minimap")
-	void SetAlliedTeamIndices(const TArray<int32>& InAlliedTeamIndices);
-
-	UFUNCTION(BlueprintCallable, Category = "FogOfWar|MassBattleFrame Minimap")
-	void SetRelationColorsEnabled(bool bEnabled);
-
-	UFUNCTION(BlueprintPure, Category = "FogOfWar|MassBattleFrame Minimap")
-	bool GetRelationColorsEnabled() const { return bRelationColorsEnabled; }
+	/** Reads configured nation colors into the caller-owned canonical palette. */
+	void LoadConfiguredTeamColors(TArray<FLinearColor>& OutTeamColors) const;
+	/** The one render submission path for a complete TeamId-to-color palette. */
+	void CommitTeamColors(TConstArrayView<FLinearColor> InTeamColors);
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -113,14 +109,6 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "MassBattleFrame Minimap|Performance", meta = (ClampMin = "0.0", UIMin = "0.0", Units = "Hz", DisplayName = "Update Rate"))
 	float UpdateRateHz = 3.0f;
 
-	/** Manual additions used when diplomacy has no hostile relation for that Team. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
-	TArray<int32> AlliedTeamIndices;
-
-	/** Team id is used directly as this array's GPU lookup index. */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
-	TArray<FLinearColor> TeamColors;
-
 	/** Used for every Team ID that has no explicit TeamColorN entry in MinimapColors.ini. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MassBattleFrame Minimap|Team")
 	FLinearColor DefaultTeamColor = FLinearColor(0.7f, 0.7f, 0.7f, 1.0f);
@@ -145,7 +133,6 @@ protected:
 private:
 	bool ResolveMapRegion();
 	void ApplyBaseMapTextureFromConfig();
-	void LoadTeamColorsFromConfig();
 	void HandleUpdateTimer();
 	void RestartUpdateTimer();
 	void StopUpdateTimer();
@@ -157,5 +144,4 @@ private:
 	TSharedPtr<FMassBattleMinimapRenderData, ESPMode::ThreadSafe> RenderData;
 
 	bool bIsSuccessfullyInitialized = false;
-	bool bRelationColorsEnabled = false;
 };
